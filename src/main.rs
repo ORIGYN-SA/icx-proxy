@@ -306,6 +306,7 @@ async fn forward_request(
     dns_canister_config: &DnsCanisterConfig,
     logger: slog::Logger,
 ) -> Result<Response<Body>, Box<dyn Error>> {
+    slog::info!(logger, "forward_request uri:{}", request.uri());
     let (canister_id, found_uri) = match resolve_canister_id(&request, dns_canister_config) {
         (None, _) => {
             return Ok(Response::builder()
@@ -329,6 +330,7 @@ async fn forward_request(
     let uri = found_uri
         .map(|u| format!("/-/{}", u))
         .unwrap_or_else(|| parts.uri.to_string());
+
     let method = parts.method;
     let headers = parts
         .headers
@@ -783,6 +785,13 @@ async fn handle_request(
     debug: bool,
 ) -> Result<Response<Body>, Infallible> {
     let request_uri_path = request.uri().path();
+
+    slog::info!(
+        logger,
+        "handle_request.request_uri_path:{}",
+        request_uri_path
+    );
+
     let result = if request_uri_path.starts_with("/api/") {
         slog::debug!(
             logger,
@@ -915,7 +924,6 @@ mod test {
         let config = DnsCanisterConfig::new(&dns_aliases, &[]).unwrap();
         let uri = "/-/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
-        //        println!("res:{:?}", res);
         let (canister_id, uri) = res.unwrap();
         assert_eq!("uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
@@ -923,9 +931,14 @@ mod test {
             .parse::<Uri>()
             .unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
-        //        println!("res:{:?}", res);
         let (canister_id, uri) = res.unwrap();
         assert_eq!("uefa_nfts4g_0", uri);
+        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
+
+        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1".parse::<Uri>().unwrap();
+        let res = resolve_canister_id_from_uri(&uri, &config);
+        let (canister_id, uri) = res.unwrap();
+        assert_eq!("1", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         //https://nft.origyn.network/x/-/y => Error
