@@ -4,4 +4,4 @@ RUN cargo install icx-proxy
 
 EXPOSE 443
 
-CMD ["icx-proxy", "--replica", "https://ic0.app", "--address", "0.0.0.0:443"]
+CMD ["icx-proxy", "--replica", "https://ic0.app", "--address", "0.0.0.0:443","--dns-alias","uefa_nfts4g:r5m5i-tiaaa-aaaaj-acgaq-cai"]
