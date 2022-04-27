@@ -1,0 +1,7 @@
+aws_profile       = "origyn-root"
+environment       = "dev"
+application_name  = "icx-proxy"
+vps_name          = "origyn-dev"
+load_balancer_type = "application"
+tsl_certificate_arn = ""
+health_check_path = "/?canisterId=a4gq6-oaaaa-aaaab-qaa4q-cai"
