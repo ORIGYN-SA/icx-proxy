@@ -1,0 +1,15 @@
+locals {
+  name_prefix                    = "tf-${var.application_name}"
+  environment_short_name         = "${var.environment}-${data.aws_region.current.name}"
+  ecs_service_name               = "${local.name_prefix}-ecs-service-${local.environment_short_name}"
+  image_tag_parameter_name       = "${local.name_prefix}-image-tag-${local.environment_short_name}"
+  target_group_name              = "${local.name_prefix}-ecs-tg-${local.environment_short_name}"
+  alb_name                       = "${local.name_prefix}-alb-${var.environment}"
+  alb_sg_name                    = "${local.name_prefix}-alb-sg-${local.environment_short_name}"
+  alb_tg_name                    = "${local.name_prefix}-alb-tg-${var.environment}"
+  ecr_name                       = "${local.name_prefix}-${var.environment}"
+  fargate_sg_name                = "${local.name_prefix}-ecs-fargate-sg-${local.environment_short_name}"
+  ecs_execution_role_name        = "${local.name_prefix}-ecs-exec-role-${local.environment_short_name}"
+  ecs_task_role_name             = "${local.name_prefix}-ecs-task-role-${local.environment_short_name}"
+  ecs_task_sg                    = "${local.name_prefix}-ecs-task-sg-${local.environment_short_name}"
+}
