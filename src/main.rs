@@ -156,8 +156,11 @@ fn resolve_canister_id_from_uri(
             .or_else(|| dns_canister_config.resolve_canister_id_from_name(x))?;
 
         if let Some("-") = segment.next() {
-            let y = segment.next()?;
-            return Some((id, y.to_string()));
+            //let y = segment.next()?;
+            let y = segment.map(|s| format!("/{}", s)).collect::<String>();
+            if y.len() != 0 {
+                return Some((id, y));
+            }
         }
     }
     None
@@ -328,7 +331,7 @@ async fn forward_request(
 
     let (parts, body) = request.into_parts();
     let uri = found_uri
-        .map(|u| format!("/-/{}", u))
+        .map(|u| format!("/-{}", u))
         .unwrap_or_else(|| parts.uri.to_string());
 
     let method = parts.method;
@@ -925,20 +928,36 @@ mod test {
         let uri = "/-/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("uefa_nfts4g_0", uri);
+        assert_eq!("/uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/uefa_nfts4g_0"
             .parse::<Uri>()
             .unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("uefa_nfts4g_0", uri);
+        assert_eq!("/uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1".parse::<Uri>().unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("1", uri);
+        assert_eq!("/1", uri);
+        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
+
+        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex"
+            .parse::<Uri>()
+            .unwrap();
+        let res = resolve_canister_id_from_uri(&uri, &config);
+        let (canister_id, uri) = res.unwrap();
+        assert_eq!("/1/ex", uri);
+        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
+
+        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx"
+            .parse::<Uri>()
+            .unwrap();
+        let res = resolve_canister_id_from_uri(&uri, &config);
+        let (canister_id, uri) = res.unwrap();
+        assert_eq!("/1/ex/yx", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         //https://nft.origyn.network/x/-/y => Error
