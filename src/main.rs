@@ -159,7 +159,9 @@ fn resolve_canister_id_from_uri(
             //let y = segment.next()?;
             let y = segment.map(|s| format!("/{}", s)).collect::<String>();
             if y.len() != 0 {
-                return Some((id, y));
+                //add query string.
+                let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
+                return Some((id, uri));
             }
         }
     }
@@ -1008,6 +1010,14 @@ mod test {
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/1/ex/yx", uri);
+        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
+
+        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx?q1=23&q2=33"
+            .parse::<Uri>()
+            .unwrap();
+        let res = resolve_canister_id_from_uri(&uri, &config);
+        let (canister_id, uri) = res.unwrap();
+        assert_eq!("/1/ex/yx?q1=23&q2=33", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         //https://nft.origyn.network/x/-/y => Error
