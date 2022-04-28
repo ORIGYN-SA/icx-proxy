@@ -34,7 +34,7 @@ use std::{
     str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
 };
 
@@ -306,20 +306,20 @@ fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> Heade
 async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
-    dns_canister_config: &DnsCanisterConfig,
+    dns_canister_config: &RwLock<DnsCanisterConfig>,
     logger: slog::Logger,
 ) -> Result<Response<Body>, Box<dyn Error>> {
-    slog::info!(logger, "forward_request uri:{}", request.uri());
-    let (canister_id, found_uri) = match resolve_canister_id(&request, dns_canister_config) {
-        (None, _) => {
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("Could not find a canister id to forward to.".into())
-                .unwrap())
-        }
-        (Some(x), None) => (x, None),
-        (Some(x), Some(y)) => (x, Some(y)),
-    };
+    let (canister_id, found_uri) =
+        match resolve_canister_id(&request, &dns_canister_config.read().unwrap()) {
+            (None, _) => {
+                return Ok(Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body("Could not find a canister id to forward to.".into())
+                    .unwrap())
+            }
+            (Some(x), None) => (x, None),
+            (Some(x), Some(y)) => (x, Some(y)),
+        };
 
     slog::trace!(
         logger,
@@ -769,6 +769,21 @@ fn not_found() -> Result<Response<Body>, Box<dyn Error>> {
         .status(StatusCode::NOT_FOUND)
         .body("Not found".into())?)
 }
+fn bad_request() -> Result<Response<Body>, Box<dyn Error>> {
+    Ok(Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .body("Bad Request".into())?)
+}
+fn unauthorized() -> Result<Response<Body>, Box<dyn Error>> {
+    Ok(Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .body("Unauthorized".into())?)
+}
+fn ok() -> Result<Response<Body>, Box<dyn Error>> {
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .body("OK".into())?)
+}
 
 fn unable_to_fetch_root_key() -> Result<Response<Body>, Box<dyn Error>> {
     Ok(Response::builder()
@@ -782,7 +797,7 @@ async fn handle_request(
     request: Request<Body>,
     replica_url: String,
     proxy_url: Option<String>,
-    dns_canister_config: Arc<DnsCanisterConfig>,
+    dns_canister_config: Arc<RwLock<DnsCanisterConfig>>,
     logger: slog::Logger,
     fetch_root_key: bool,
     debug: bool,
@@ -802,6 +817,38 @@ async fn handle_request(
             &request.uri().path()
         );
         forward_api(&ip_addr, request, &replica_url).await
+    } else if request_uri_path.starts_with("/healthcheck") {
+        ok()
+    } else if request_uri_path.starts_with("/admintag") {
+        //get Xkey to verify call.
+        if let Some(xapikey_header) = request.headers().get("X-API-KEY") {
+            if xapikey_header == "f69fdd4d-95c8-4aa1-966c-eaf791340946" {
+                //Extract tag/canister value.
+                if let Some(mut segments) = path_segments(request.uri()) {
+                    segments.next(); //remove admintag
+                    let res = segments
+                        .next()
+                        .and_then(|tag| segments.next().map(|canister_id| (tag, canister_id)))
+                        .map(|(tag, canister_id)| {
+                            dns_canister_config
+                                .write()
+                                .unwrap()
+                                .add_alias_rule(tag, canister_id)
+                        });
+                    match res {
+                        None => bad_request(),
+                        Some(Err(_)) => bad_request(),
+                        Some(Ok(_)) => ok(),
+                    }
+                } else {
+                    bad_request()
+                }
+            } else {
+                unauthorized()
+            }
+        } else {
+            unauthorized()
+        }
     } else if request_uri_path.starts_with("/_/") && !request_uri_path.starts_with("/_/raw") {
         if let Some(proxy_url) = proxy_url {
             slog::debug!(
@@ -857,7 +904,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Prepare a list of agents for each backend replicas.
     let replicas = Mutex::new(opts.replica.clone());
 
-    let dns_canister_config = Arc::new(DnsCanisterConfig::new(&opts.dns_alias, &opts.dns_suffix)?);
+    let dns_canister_config = Arc::new(RwLock::new(DnsCanisterConfig::new(
+        &opts.dns_alias,
+        &opts.dns_suffix,
+    )?));
 
     let counter = AtomicUsize::new(0);
     let debug = opts.debug;

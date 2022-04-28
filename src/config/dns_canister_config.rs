@@ -29,6 +29,12 @@ impl DnsCanisterConfig {
         Ok(DnsCanisterConfig { rules })
     }
 
+    pub fn add_alias_rule(&mut self, alias: &str, canister_id: &str) -> anyhow::Result<()> {
+        let rule = DnsCanisterRule::new_alias(&format!("{}:{}", alias, canister_id))?;
+        self.rules.push(rule);
+        Ok(())
+    }
+
     /// Return the Principal of the canister that domain name matches the name.
     ///
     /// the specified name is expected to be the domain name of the DnsCanisterRule,
