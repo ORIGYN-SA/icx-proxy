@@ -16,11 +16,6 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  egress {
-    protocol    = "tcp"
-    from_port   = var.container_port
-    to_port     = var.container_port
-    }
 
   tags = {
     Name = local.alb_sg_name
@@ -31,12 +26,6 @@ resource "aws_security_group" "ecs_tasks" {
   name   = local.ecs_task_sg
   vpc_id = data.aws_vpc.selected_vpc.id
 
-  ingress {
-    protocol    = "tcp"
-    from_port   = var.container_port
-    to_port     = var.container_port
-    security_groups = [aws_security_group.alb.id]
-  }
 
   egress {
     protocol    = "-1"
@@ -48,4 +37,20 @@ resource "aws_security_group" "ecs_tasks" {
   tags = {
     Name = local.ecs_task_sg
   }
+}
+resource "aws_security_group_rule" "alb_rule1" {
+  from_port = var.container_port
+  protocol = "tcp"
+  security_group_id = aws_security_group.alb.id
+  source_security_group_id = aws_security_group.ecs_tasks.id
+  to_port = var.container_port
+  type = "egress"
+}
+resource "aws_security_group_rule" "ecs_rule1" {
+  from_port = var.container_port
+  protocol = "tcp"
+  security_group_id = aws_security_group.ecs_tasks.id
+  source_security_group_id = aws_security_group.alb.id
+  to_port = var.container_port
+  type = "ingress"
 }
