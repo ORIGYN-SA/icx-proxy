@@ -31,6 +31,7 @@ impl DnsCanisterRule {
     pub fn new_alias(dns_alias: &str) -> anyhow::Result<DnsCanisterRule> {
         let (domain_name, principal) = split_dns_alias(dns_alias)?;
         let dns_suffix = split_hostname_lowercase(&domain_name);
+
         Ok(DnsCanisterRule {
             domain_name,
             dns_suffix,
