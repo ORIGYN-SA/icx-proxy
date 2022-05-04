@@ -924,7 +924,7 @@ async fn update_redis_thread(
     let redis_client = redis::Client::open(redis_url)?;
 
     while let Some((alias, canister_id)) = redis_rx.recv().await {
-        slog::trace!(logger, "Update cache = {}:{}", alias, canister_id);
+        println!("Update cache = {}:{}", alias, canister_id);
         if let Err(err) = redis_client
             .get_connection()
             .and_then(|mut con| con.set_ex::<_, _, ()>(&alias, &canister_id, redis_cache_timout))
@@ -955,22 +955,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let redis_logger = logger.clone();
     let th_redis_url = opts.redis_url.clone();
     let th_redis_cache_timeout = opts.redis_cache_timeout;
-    tokio::spawn(async move {
-        if let Err(err) = update_redis_thread(
-            &th_redis_url,
-            redis_rx,
-            th_redis_cache_timeout,
-            redis_logger.clone(),
-        )
-        .await
-        {
-            slog::error!(
-                redis_logger,
-                "Error Bad Redis Url can't start client connection: {}",
-                err
-            );
-        }
-    });
 
     //create name alias resolution struct
     let dns_canister_config = Arc::new(DnsCanisterConfig::new(
@@ -1026,6 +1010,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         .worker_threads(10)
         .enable_all()
         .build()?;
+
+    runtime.spawn(async move {
+        if let Err(err) = update_redis_thread(
+            &th_redis_url,
+            redis_rx,
+            th_redis_cache_timeout,
+            redis_logger.clone(),
+        )
+        .await
+        {
+            slog::error!(
+                redis_logger,
+                "Error Bad Redis Url can't start client connection: {} for url:{}",
+                err,
+                &th_redis_url
+            );
+        }
+    });
     runtime.block_on(async {
         let server = Server::bind(&opts.address).serve(service);
         server.await?;

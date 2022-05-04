@@ -9,9 +9,11 @@ use tokio::sync::mpsc;
 #[derive(Clone, Debug)]
 pub struct DnsCanisterConfig {
     rules: Vec<DnsCanisterRule>,
+    //parameter is optional to simplify test (avoid to have a redis mock)
     redis_param: Option<(redis::Client, mpsc::Sender<(String, String)>)>,
     logger: Option<slog::Logger>,
-    phonebook_id: String,
+    //the same for the phone book canister.
+    phonebook_id: Option<Principal>,
 }
 
 impl DnsCanisterConfig {
@@ -54,6 +56,20 @@ impl DnsCanisterConfig {
                 .ok()
         });
 
+        //manage phone book canister
+        let phonebook_id = Principal::from_text(phonebook_id)
+            .or_else(|err| {
+                logger.as_ref().map(|logger| {
+                    slog::error!(
+                        logger,
+                        "Error Phone book canister id not a principal: {}",
+                        err
+                    )
+                });
+                Err(err)
+            })
+            .ok();
+
         Ok(DnsCanisterConfig {
             rules,
             redis_param,
@@ -73,17 +89,19 @@ impl DnsCanisterConfig {
     /// the specified name is expected to be the domain name of the DnsCanisterRule,
     /// but may contain upper- or lower-case characters.
     pub fn resolve_canister_id_from_name(&self, name: &str) -> Option<Principal> {
+        println!("resolve_canister_id_from_name {}", name);
         self.rules
             .iter()
             .find_map(|rule| rule.lookup_name(&name))
             //if not found find in redis
             .or_else(|| {
                 //call redis if the cache is activated
-                self.redis_cache_tx.as_ref().and_then(|_| {
-                    self.redis_client
+                self.redis_param.as_ref().and_then(|(redis_client, _)| {
+                    redis_client
                         .get_connection()
                         .and_then(|mut con| con.get::<_, String>(&name))
                         .and_then(|s| {
+                            println!("get canister id from redis: {}", s);
                             Principal::from_text(s).map_err(|_| {
                                 redis::RedisError::from((
                                     redis::ErrorKind::TypeError,
@@ -96,21 +114,25 @@ impl DnsCanisterConfig {
             })
             //if not found find in phone book canister.
             .or_else(|| {
-                //for test purpose to be removed with canister call
-                let canister_id = "r5m5i-tiaaa-aaaaj-acgaq-cai".to_string();
-                if let Some(tx) = self.redis_cache_tx.as_ref() {
-                    if let Err(err) = tx.try_send((name.to_string(), canister_id.clone())) {
-                        self.logger.as_ref().map(|logger| {
-                            slog::error!(
-                                logger,
-                                "Error could not send canister_id to the Redis channel: {}",
-                                err
-                            )
-                        });
+                self.phonebook_id.and_then(|_phonebook_id| {
+                    //for test purpose to be removed with canister call
+                    let canister_id = "r5m5i-tiaaa-aaaaj-acgaq-cai".to_string();
+                    if let Some((_, redis_cache_tx)) = self.redis_param.as_ref() {
+                        if let Err(err) =
+                            redis_cache_tx.try_send((name.to_string(), canister_id.clone()))
+                        {
+                            self.logger.as_ref().map(|logger| {
+                                slog::error!(
+                                    logger,
+                                    "Error could not send canister_id to the Redis channel: {}",
+                                    err
+                                )
+                            });
+                        }
                     }
-                }
 
-                Principal::from_text(canister_id).ok()
+                    Principal::from_text(canister_id).ok()
+                })
             })
     }
 
