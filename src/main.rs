@@ -23,6 +23,7 @@ use ic_utils::{
     },
 };
 use lazy_regex::regex_captures;
+use redis::Commands;
 use sha2::{Digest, Sha256};
 use slog::Drain;
 use std::{
@@ -34,9 +35,10 @@ use std::{
     str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, RwLock,
+        Arc, Mutex,
     },
 };
+use tokio::sync::mpsc;
 
 mod config;
 mod logging;
@@ -45,6 +47,8 @@ type HttpResponseAny = HttpResponse<Token, HttpRequestStreamingCallbackAny>;
 
 // Limit the total number of calls to an HTTP Request loop to 1000 for now.
 const MAX_HTTP_REQUEST_STREAM_CALLBACK_CALL_COUNT: i32 = 1000;
+//set str because clap need str for default value.
+const DEFAULT_REDIS_EXPIRY_CACHE_TIMEOUT_IN_SECOND: &'static str = "86400"; //24h = 3600 * 24
 
 // The maximum length of a body we should log as tracing.
 const MAX_LOG_BODY_SIZE: usize = 100;
@@ -114,72 +118,26 @@ pub(crate) struct Opts {
     /// is used as the Principal, if it parses as a Principal.
     #[clap(long, default_value = "localhost")]
     dns_suffix: Vec<String>,
-}
 
-fn resolve_canister_id_from_hostname(
-    hostname: &str,
-    dns_canister_config: &DnsCanisterConfig,
-) -> Option<Principal> {
-    let url = Uri::from_str(hostname).ok()?;
+    /// A map of domain names to canister IDs.
+    /// Format: domain.name:canister-id
+    #[clap(long, short('r'))]
+    redis_url: String,
 
-    let split_hostname = url.host()?.split('.').collect::<Vec<&str>>();
-    let split_hostname = split_hostname.as_slice();
+    /// A map of domain names to canister IDs.
+    /// Format: domain.name:canister-id
+    #[clap(long, short('p'))]
+    phonebook_id: String,
 
-    if let Some(principal) =
-        dns_canister_config.resolve_canister_id_from_split_hostname(split_hostname)
-    {
-        return Some(principal);
-    }
-    // Check if it's localhost or ic0.
-    match split_hostname {
-        [.., maybe_canister_id, "localhost"] => Principal::from_text(maybe_canister_id).ok(),
-        [maybe_canister_id, ..] => Principal::from_text(maybe_canister_id).ok(),
-        _ => None,
-    }
-}
-
-fn resolve_canister_id_from_uri(
-    url: &hyper::Uri,
-    dns_canister_config: &DnsCanisterConfig,
-    //canister_list: &[(String, Principal)],
-) -> Option<(Principal, String)> {
-    //    let (_, canister_id) = url::form_urlencoded::parse(url.query()?.as_bytes())
-    //        .find(|(name, _)| name == "canisterId")?;
-    //    Principal::from_text(canister_id.as_ref()).ok()
-
-    let mut segment = path_segments(url)?;
-    if let Some("-") = segment.next() {
-        let x = segment.next()?;
-        //detect if it's a canister id
-        let id = Principal::from_text(x)
-            .ok()
-            .or_else(|| dns_canister_config.resolve_canister_id_from_name(x))?;
-
-        if let Some("-") = segment.next() {
-            //let y = segment.next()?;
-            let y = segment.map(|s| format!("/{}", s)).collect::<String>();
-            if y.len() != 0 {
-                //add query string.
-                let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
-                return Some((id, uri));
-            }
-        }
-    }
-    None
-}
-
-pub fn path_segments(url: &hyper::Uri) -> Option<std::str::Split<'_, char>> {
-    let path = url.path();
-    if path.starts_with('/') {
-        Some(path[1..].split('/'))
-    } else {
-        None
-    }
+    /// The address to bind to.
+    #[clap(long, default_value = DEFAULT_REDIS_EXPIRY_CACHE_TIMEOUT_IN_SECOND)]
+    redis_cache_timeout: usize,
 }
 
 /// Try to resolve a (canister ID, uri) from an HTTP Request. If it cannot be resolved,
 /// [None] will be returned.
-fn resolve_canister_id(
+//REMOVED because host alias is not use. Remove unused function.
+/*fn resolve_canister_id(
     request: &Request<Body>,
     dns_canister_config: &DnsCanisterConfig,
 ) -> (Option<Principal>, Option<String>) {
@@ -214,6 +172,67 @@ fn resolve_canister_id(
     }
 
     (None, None)
+}*/
+
+//REMOVED because host alias is not use. Remove unused function.
+/*fn resolve_canister_id_from_hostname(
+    hostname: &str,
+    dns_canister_config: &DnsCanisterConfig,
+) -> Option<Principal> {
+    let url = Uri::from_str(hostname).ok()?;
+
+    let split_hostname = url.host()?.split('.').collect::<Vec<&str>>();
+    let split_hostname = split_hostname.as_slice();
+
+    if let Some(principal) =
+        dns_canister_config.resolve_canister_id_from_split_hostname(split_hostname)
+    {
+        return Some(principal);
+    }
+    // Check if it's localhost or ic0.
+    match split_hostname {
+        [.., maybe_canister_id, "localhost"] => Principal::from_text(maybe_canister_id).ok(),
+        [maybe_canister_id, ..] => Principal::from_text(maybe_canister_id).ok(),
+        _ => None,
+    }
+}*/
+
+fn resolve_canister_id_from_uri(
+    url: &hyper::Uri,
+    dns_canister_config: &DnsCanisterConfig,
+) -> Option<(Principal, String)> {
+    //    let (_, canister_id) = url::form_urlencoded::parse(url.query()?.as_bytes())
+    //        .find(|(name, _)| name == "canisterId")?;
+    //    Principal::from_text(canister_id.as_ref()).ok()
+
+    let mut segment = path_segments(url)?;
+    if let Some("-") = segment.next() {
+        let x = segment.next()?;
+        //detect if it's a canister id
+        let id = Principal::from_text(x)
+            .ok()
+            .or_else(|| dns_canister_config.resolve_canister_id_from_name(x))?;
+
+        if let Some("-") = segment.next() {
+            //let y = segment.next()?;
+            let y = segment.map(|s| format!("/{}", s)).collect::<String>();
+            if y.len() != 0 {
+                //add query string.
+                let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
+                return Some((id, format!("/-{}", uri)));
+            }
+        }
+    }
+    None
+}
+
+pub fn path_segments(url: &hyper::Uri) -> Option<std::str::Split<'_, char>> {
+    let path = url.path();
+    if path.starts_with('/') {
+        Some(path[1..].split('/'))
+    } else {
+        None
+    }
 }
 
 fn decode_hash_tree(
@@ -308,33 +327,31 @@ fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> Heade
 async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
-    dns_canister_config: &RwLock<DnsCanisterConfig>,
+    dns_canister_config: &DnsCanisterConfig,
     logger: slog::Logger,
 ) -> Result<Response<Body>, Box<dyn Error>> {
     let (canister_id, found_uri) =
-        match resolve_canister_id(&request, &dns_canister_config.read().unwrap()) {
-            (None, _) => {
+        match resolve_canister_id_from_uri(request.uri(), dns_canister_config) {
+            None => {
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body("Could not find a canister id to forward to.".into())
                     .unwrap())
             }
-            (Some(x), None) => (x, None),
-            (Some(x), Some(y)) => (x, Some(y)),
+            Some((x, y)) => (x, y),
         };
 
     slog::trace!(
         logger,
-        "<< {} {} {:?}",
+        "<< {} {} {:?} resolved to {}/-/{}",
         request.method(),
         request.uri(),
-        &request.version()
+        &request.version(),
+        canister_id,
+        found_uri,
     );
 
     let (parts, body) = request.into_parts();
-    let uri = found_uri
-        .map(|u| format!("/-{}", u))
-        .unwrap_or_else(|| parts.uri.to_string());
 
     let method = parts.method;
     let headers = parts
@@ -374,7 +391,7 @@ async fn forward_request(
     let query_result = canister
         .http_request_custom(
             method.as_str(),
-            uri.as_str(),
+            found_uri.as_str(),
             headers.iter().cloned(),
             &entire_body,
         )
@@ -412,7 +429,7 @@ async fn forward_request(
         let update_result = canister
             .http_request_update_custom(
                 method.as_str(),
-                uri.as_str(),
+                found_uri.as_str(),
                 headers.iter().cloned(),
                 &entire_body,
             )
@@ -771,7 +788,7 @@ fn not_found() -> Result<Response<Body>, Box<dyn Error>> {
         .status(StatusCode::NOT_FOUND)
         .body("Not found".into())?)
 }
-fn bad_request() -> Result<Response<Body>, Box<dyn Error>> {
+/*fn bad_request() -> Result<Response<Body>, Box<dyn Error>> {
     Ok(Response::builder()
         .status(StatusCode::BAD_REQUEST)
         .body("Bad Request".into())?)
@@ -780,7 +797,7 @@ fn unauthorized() -> Result<Response<Body>, Box<dyn Error>> {
     Ok(Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .body("Unauthorized".into())?)
-}
+}*/
 fn ok() -> Result<Response<Body>, Box<dyn Error>> {
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -799,7 +816,7 @@ async fn handle_request(
     request: Request<Body>,
     replica_url: String,
     proxy_url: Option<String>,
-    dns_canister_config: Arc<RwLock<DnsCanisterConfig>>,
+    dns_canister_config: Arc<DnsCanisterConfig>,
     logger: slog::Logger,
     fetch_root_key: bool,
     debug: bool,
@@ -821,36 +838,36 @@ async fn handle_request(
         forward_api(&ip_addr, request, &replica_url).await
     } else if request_uri_path.starts_with("/healthcheck") {
         ok()
-    } else if request_uri_path.starts_with("/admintag") {
-        //get Xkey to verify call.
-        if let Some(xapikey_header) = request.headers().get("X-API-KEY") {
-            if xapikey_header == "f69fdd4d-95c8-4aa1-966c-eaf791340946" {
-                //Extract tag/canister value.
-                if let Some(mut segments) = path_segments(request.uri()) {
-                    segments.next(); //remove admintag
-                    let res = segments
-                        .next()
-                        .and_then(|tag| segments.next().map(|canister_id| (tag, canister_id)))
-                        .map(|(tag, canister_id)| {
-                            dns_canister_config
-                                .write()
-                                .unwrap()
-                                .add_alias_rule(tag, canister_id)
-                        });
-                    match res {
-                        None => bad_request(),
-                        Some(Err(_)) => bad_request(),
-                        Some(Ok(_)) => ok(),
-                    }
-                } else {
-                    bad_request()
+    /*    } else if request_uri_path.starts_with("/admintag") {
+    //get Xkey to verify call.
+    if let Some(xapikey_header) = request.headers().get("X-API-KEY") {
+        if xapikey_header == "f69fdd4d-95c8-4aa1-966c-eaf791340946" {
+            //Extract tag/canister value.
+            if let Some(mut segments) = path_segments(request.uri()) {
+                segments.next(); //remove admintag
+                let res = segments
+                    .next()
+                    .and_then(|tag| segments.next().map(|canister_id| (tag, canister_id)))
+                    .map(|(tag, canister_id)| {
+                        dns_canister_config
+                            .write()
+                            .unwrap()
+                            .add_alias_rule(tag, canister_id)
+                    });
+                match res {
+                    None => bad_request(),
+                    Some(Err(_)) => bad_request(),
+                    Some(Ok(_)) => ok(),
                 }
             } else {
-                unauthorized()
+                bad_request()
             }
         } else {
             unauthorized()
         }
+    } else {
+        unauthorized()
+    } */
     } else if request_uri_path.starts_with("/_/") && !request_uri_path.starts_with("/_/raw") {
         if let Some(proxy_url) = proxy_url {
             slog::debug!(
@@ -898,6 +915,26 @@ async fn handle_request(
     }
 }
 
+async fn update_redis_thread(
+    redis_url: &str,
+    mut redis_rx: mpsc::Receiver<(String, String)>,
+    redis_cache_timout: usize,
+    logger: slog::Logger,
+) -> Result<(), Box<dyn Error>> {
+    let redis_client = redis::Client::open(redis_url)?;
+
+    while let Some((alias, canister_id)) = redis_rx.recv().await {
+        slog::trace!(logger, "Update cache = {}:{}", alias, canister_id);
+        if let Err(err) = redis_client
+            .get_connection()
+            .and_then(|mut con| con.set_ex::<_, _, ()>(&alias, &canister_id, redis_cache_timout))
+        {
+            slog::error!(logger, "Error during Redis cache update: {}", err);
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let opts: Opts = Opts::parse();
 
@@ -906,15 +943,43 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Prepare a list of agents for each backend replicas.
     let replicas = Mutex::new(opts.replica.clone());
 
-    let dns_canister_config = Arc::new(RwLock::new(DnsCanisterConfig::new(
-        &opts.dns_alias,
-        &opts.dns_suffix,
-    )?));
-
     let counter = AtomicUsize::new(0);
     let debug = opts.debug;
     let proxy_url = opts.proxy.clone();
     let fetch_root_key = opts.fetch_root_key;
+
+    //create Redis cache update channel.
+    //A cache entry is send to the channel and
+    // a async thread read it and send to Redis.
+    let (redis_tx, redis_rx) = mpsc::channel(32);
+    let redis_logger = logger.clone();
+    let th_redis_url = opts.redis_url.clone();
+    let th_redis_cache_timeout = opts.redis_cache_timeout;
+    tokio::spawn(async move {
+        if let Err(err) = update_redis_thread(
+            &th_redis_url,
+            redis_rx,
+            th_redis_cache_timeout,
+            redis_logger.clone(),
+        )
+        .await
+        {
+            slog::error!(
+                redis_logger,
+                "Error Bad Redis Url can't start client connection: {}",
+                err
+            );
+        }
+    });
+
+    //create name alias resolution struct
+    let dns_canister_config = Arc::new(DnsCanisterConfig::new(
+        &opts.dns_alias,
+        &opts.dns_suffix,
+        Some((&opts.redis_url, redis_tx)),
+        Some(logger.clone()),
+        opts.phonebook_id.clone(),
+    )?);
 
     let service = make_service_fn(|socket: &hyper::server::conn::AddrStream| {
         let ip_addr = socket.remote_addr();
@@ -976,24 +1041,24 @@ mod test {
     #[test]
     fn test_resolve_canister_id_from_uri() {
         let dns_aliases = ["uefa_nfts4g:r5m5i-tiaaa-aaaaj-acgaq-cai".to_string()];
-        let config = DnsCanisterConfig::new(&dns_aliases, &[]).unwrap();
+        let config = DnsCanisterConfig::new(&dns_aliases, &[], None, None, "".to_string()).unwrap();
         let uri = "/-/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("/uefa_nfts4g_0", uri);
+        assert_eq!("/-/uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/uefa_nfts4g_0"
             .parse::<Uri>()
             .unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("/uefa_nfts4g_0", uri);
+        assert_eq!("/-/uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1".parse::<Uri>().unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("/1", uri);
+        assert_eq!("/-/1", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex"
@@ -1001,7 +1066,7 @@ mod test {
             .unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("/1/ex", uri);
+        assert_eq!("/-/1/ex", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx"
@@ -1009,7 +1074,7 @@ mod test {
             .unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("/1/ex/yx", uri);
+        assert_eq!("/-/1/ex/yx", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx?q1=23&q2=33"
@@ -1017,7 +1082,7 @@ mod test {
             .unwrap();
         let res = resolve_canister_id_from_uri(&uri, &config);
         let (canister_id, uri) = res.unwrap();
-        assert_eq!("/1/ex/yx?q1=23&q2=33", uri);
+        assert_eq!("/-/1/ex/yx?q1=23&q2=33", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         //https://nft.origyn.network/x/-/y => Error

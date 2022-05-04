@@ -27,6 +27,13 @@ pub struct DnsCanisterRule {
 }
 
 impl DnsCanisterRule {
+    pub fn is_alias(&self) -> bool {
+        if let PrincipalDeterminationStrategy::PrecedingDomainName = self.strategy {
+            false
+        } else {
+            true
+        }
+    }
     /// Create a rule for a domain name alias with form dns.alias:canister-id
     pub fn new_alias(dns_alias: &str) -> anyhow::Result<DnsCanisterRule> {
         let (domain_name, principal) = split_dns_alias(dns_alias)?;
@@ -79,6 +86,16 @@ impl DnsCanisterRule {
             }
         } else {
             None
+        }
+    }
+}
+impl ToString for &DnsCanisterRule {
+    fn to_string(&self) -> String {
+        match self.strategy {
+            PrincipalDeterminationStrategy::Alias(principal) => {
+                format!("{}:{}", self.domain_name, principal)
+            }
+            PrincipalDeterminationStrategy::PrecedingDomainName => self.domain_name.to_string(),
         }
     }
 }

@@ -38,6 +38,7 @@ slog = { version = "2", features = ["max_level_trace"] }
 slog-async = "2"
 slog-term = "2"
 url = "2"
+redis = "0.21.5"
 
 [features]
 skip_body_verification = []
