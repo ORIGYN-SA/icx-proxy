@@ -1,4 +1,4 @@
-use crate::config::dns_canister_config::DnsCanisterConfig;
+use crate::config::dns_canister_config::{DnsCanisterConfig, PhoneBookCanisterParam};
 use clap::{crate_authors, crate_version, Parser};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use hyper::{
@@ -197,9 +197,10 @@ pub(crate) struct Opts {
     }
 }*/
 
-fn resolve_canister_id_from_uri(
+async fn resolve_canister_id_from_uri(
     url: &hyper::Uri,
     dns_canister_config: &DnsCanisterConfig,
+    phonebook_param: Option<&PhoneBookCanisterParam>,
 ) -> Option<(Principal, String)> {
     //    let (_, canister_id) = url::form_urlencoded::parse(url.query()?.as_bytes())
     //        .find(|(name, _)| name == "canisterId")?;
@@ -209,9 +210,15 @@ fn resolve_canister_id_from_uri(
     if let Some("-") = segment.next() {
         let x = segment.next()?;
         //detect if it's a canister id
-        let id = Principal::from_text(x)
-            .ok()
-            .or_else(|| dns_canister_config.resolve_canister_id_from_name(x))?;
+        let id = match Principal::from_text(x) {
+            Ok(id) => id,
+            //not a caniter if, try to see if it's an alias.
+            Err(_) => {
+                dns_canister_config
+                    .resolve_canister_id_from_name(x, phonebook_param)
+                    .await?
+            }
+        };
 
         if let Some("-") = segment.next() {
             //let y = segment.next()?;
@@ -328,10 +335,13 @@ async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
     dns_canister_config: &DnsCanisterConfig,
+    phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
 ) -> Result<Response<Body>, Box<dyn Error>> {
     let (canister_id, found_uri) =
-        match resolve_canister_id_from_uri(request.uri(), dns_canister_config) {
+        match resolve_canister_id_from_uri(request.uri(), dns_canister_config, phonebook_param)
+            .await
+        {
             None => {
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -817,6 +827,7 @@ async fn handle_request(
     replica_url: String,
     proxy_url: Option<String>,
     dns_canister_config: Arc<DnsCanisterConfig>,
+    phonebook_param: Option<PhoneBookCanisterParam>,
     logger: slog::Logger,
     fetch_root_key: bool,
     debug: bool,
@@ -894,7 +905,14 @@ async fn handle_request(
         if fetch_root_key && agent.fetch_root_key().await.is_err() {
             unable_to_fetch_root_key()
         } else {
-            forward_request(request, agent, dns_canister_config.as_ref(), logger.clone()).await
+            forward_request(
+                request,
+                agent,
+                dns_canister_config.as_ref(),
+                phonebook_param.as_ref(),
+                logger.clone(),
+            )
+            .await
         }
     };
 
@@ -924,7 +942,12 @@ async fn update_redis_thread(
     let redis_client = redis::Client::open(redis_url)?;
 
     while let Some((alias, canister_id)) = redis_rx.recv().await {
-        println!("Update cache = {}:{}", alias, canister_id);
+        slog::info!(
+            logger,
+            "Update Redis with alias:canister {}:{}",
+            alias,
+            canister_id,
+        );
         if let Err(err) = redis_client
             .get_connection()
             .and_then(|mut con| con.set_ex::<_, _, ()>(&alias, &canister_id, redis_cache_timout))
@@ -956,14 +979,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     let th_redis_url = opts.redis_url.clone();
     let th_redis_cache_timeout = opts.redis_cache_timeout;
 
+    //start tokio runtime
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(10)
+        .enable_all()
+        .build()?;
+
     //create name alias resolution struct
-    let dns_canister_config = Arc::new(DnsCanisterConfig::new(
-        &opts.dns_alias,
-        &opts.dns_suffix,
-        Some((&opts.redis_url, redis_tx)),
-        Some(logger.clone()),
-        opts.phonebook_id.clone(),
-    )?);
+    let dns_canister_config: DnsCanisterConfig = runtime.block_on(async {
+        DnsCanisterConfig::new(
+            &opts.dns_alias,
+            &opts.dns_suffix,
+            Some((&opts.redis_url, redis_tx)),
+            Some(logger.clone()),
+        )
+        .await
+        .unwrap()
+    });
+    let dns_canister_config = Arc::new(dns_canister_config);
 
     let service = make_service_fn(|socket: &hyper::server::conn::AddrStream| {
         let ip_addr = socket.remote_addr();
@@ -982,16 +1015,23 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let proxy_url = proxy_url.clone();
 
+        let phone_book_id = opts.phonebook_id.clone();
+
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
                 let logger = logger.clone();
                 let dns_canister_config = dns_canister_config.clone();
+                //update phone book canister call with network replica
+                let phonebook_param =
+                    PhoneBookCanisterParam::new(&phone_book_id, &replica_url, &logger).ok();
+
                 handle_request(
                     ip_addr,
                     req,
                     replica_url.clone(),
                     proxy_url.clone(),
                     dns_canister_config,
+                    phonebook_param,
                     logger,
                     fetch_root_key,
                     debug,
@@ -1005,11 +1045,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Starting server. Listening on http://{}/",
         opts.address
     );
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(10)
-        .enable_all()
-        .build()?;
 
     runtime.spawn(async move {
         if let Err(err) = update_redis_thread(
@@ -1040,25 +1075,27 @@ mod test {
     use super::resolve_canister_id_from_uri;
     use crate::config::dns_canister_config::DnsCanisterConfig;
     use hyper::http::Uri;
-    #[test]
-    fn test_resolve_canister_id_from_uri() {
+    #[tokio::test]
+    async fn test_resolve_canister_id_from_uri() {
         let dns_aliases = ["uefa_nfts4g:r5m5i-tiaaa-aaaaj-acgaq-cai".to_string()];
-        let config = DnsCanisterConfig::new(&dns_aliases, &[], None, None, "".to_string()).unwrap();
+        let config = DnsCanisterConfig::new(&dns_aliases, &[], None, None)
+            .await
+            .unwrap();
         let uri = "/-/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/-/uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/uefa_nfts4g_0"
             .parse::<Uri>()
             .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/-/uefa_nfts4g_0", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/-/1", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
@@ -1066,7 +1103,7 @@ mod test {
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex"
             .parse::<Uri>()
             .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/-/1/ex", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
@@ -1074,7 +1111,7 @@ mod test {
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx"
             .parse::<Uri>()
             .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/-/1/ex/yx", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
@@ -1082,31 +1119,31 @@ mod test {
         let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx?q1=23&q2=33"
             .parse::<Uri>()
             .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         let (canister_id, uri) = res.unwrap();
         assert_eq!("/-/1/ex/yx?q1=23&q2=33", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
         //https://nft.origyn.network/x/-/y => Error
         let uri = "/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         assert!(res.is_none());
         //https://nft.origyn.network/-/x/y => Error
         let uri = "/-/uefa_nfts4g/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         assert!(res.is_none());
         //uefa_nfts3g can't be converted to a canister_id
         let uri = "/-/uefa_nfts3g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         assert!(res.is_none());
 
         //https://nft.origyn.network/x/y => Error
         let uri = "/uefa_nfts4g/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         assert!(res.is_none());
         //https://nft.origyn.network/-/x => Error
         let uri = "/-/uefa_nfts4g".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config);
+        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
         assert!(res.is_none());
     }
 }

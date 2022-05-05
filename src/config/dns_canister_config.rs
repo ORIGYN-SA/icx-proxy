@@ -1,19 +1,68 @@
 use crate::config::dns_canister_rule::DnsCanisterRule;
+use candid::{Decode, Encode};
 use core::convert::From;
+use ic_agent::agent::http_transport::ReqwestHttpReplicaV2Transport;
 use ic_agent::ic_types::Principal;
-use redis::Commands;
+use ic_agent::Agent;
+use redis::aio::MultiplexedConnection;
+use redis::AsyncCommands;
 use std::cmp::Reverse;
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
+
+#[derive(Clone, Debug)]
+pub struct PhoneBookCanisterParam {
+    canister_id: Principal,
+    agent: Agent,
+}
+
+impl PhoneBookCanisterParam {
+    pub fn new(
+        phonebook_id: &str,
+        network_url: &str,
+        logger: &slog::Logger,
+    ) -> Result<PhoneBookCanisterParam, String> {
+        Principal::from_text(phonebook_id)
+            .or_else(|err| {
+                slog::error!(
+                    logger,
+                    "Error Phone book canister id not a principal: {}, id:{}",
+                    err,
+                    phonebook_id,
+                );
+                Err("Error Phone book canister id not a principal".to_string())
+            })
+            .and_then(|principal| {
+                ReqwestHttpReplicaV2Transport::create(network_url)
+                    .and_then(|transport| Agent::builder().with_transport(transport).build())
+                    .map(|agent| PhoneBookCanisterParam {
+                        canister_id: principal,
+                        agent,
+                    })
+                    .map_err(|err| {
+                        slog::error!(
+                            logger,
+                            "Error Phone book canister connection error: {}",
+                            err
+                        );
+                        "Error Phone book agent connection error".to_string()
+                    })
+            })
+    }
+}
 
 /// Configuration for determination of Domain Name to Principal
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DnsCanisterConfig {
     rules: Vec<DnsCanisterRule>,
     //parameter is optional to simplify test (avoid to have a redis mock)
-    redis_param: Option<(redis::Client, mpsc::Sender<(String, String)>)>,
+    redis_param: Option<(
+        //use a mutex because the connection is only use in &mut mode. No read done.
+        Arc<Mutex<MultiplexedConnection>>,
+        mpsc::Sender<(String, String)>,
+    )>,
     logger: Option<slog::Logger>,
     //the same for the phone book canister.
-    phonebook_id: Option<Principal>,
 }
 
 impl DnsCanisterConfig {
@@ -22,12 +71,11 @@ impl DnsCanisterConfig {
     /// dns_suffixes: 0 or more domain names which will match as a suffix
     ///Redis Cache is optional to simplify local test.
     ///Runtime call force the cache.
-    pub fn new(
+    pub async fn new(
         dns_aliases: &[String],
         dns_suffixes: &[String],
         redis_param: Option<(&str, mpsc::Sender<(String, String)>)>,
         logger: Option<slog::Logger>,
-        phonebook_id: String,
     ) -> anyhow::Result<DnsCanisterConfig> {
         let mut rules = vec![];
         for suffix in dns_suffixes {
@@ -40,7 +88,7 @@ impl DnsCanisterConfig {
         // if actually preceded by a canister id.
         rules.sort_by_key(|x| Reverse(x.dns_suffix.len()));
 
-        let redis_param = redis_param.and_then(|(url, cache)| {
+        let redis_param = if let Some((client, cache)) = redis_param.and_then(|(url, cache)| {
             redis::Client::open(url)
                 .map(|client| (client, cache))
                 .or_else(|err| {
@@ -54,27 +102,27 @@ impl DnsCanisterConfig {
                     Err(err)
                 })
                 .ok()
-        });
-
-        //manage phone book canister
-        let phonebook_id = Principal::from_text(phonebook_id)
-            .or_else(|err| {
-                logger.as_ref().map(|logger| {
-                    slog::error!(
-                        logger,
-                        "Error Phone book canister id not a principal: {}",
-                        err
-                    )
-                });
-                Err(err)
-            })
-            .ok();
+        }) {
+            client.get_multiplexed_tokio_connection().await.map(|conn| (Arc::new(Mutex::new(conn)), cache))
+                    .or_else(|err| {
+                    logger.as_ref().map(|logger| {
+                        slog::error!(
+                            &logger,
+                            "Error Redis client get multiplexed connection error: {}. No cache activated",
+                            err
+                        );
+                    });
+                    Err(err)
+                })
+               .ok()
+        } else {
+            None
+        };
 
         Ok(DnsCanisterConfig {
             rules,
             redis_param,
             logger,
-            phonebook_id,
         })
     }
 
@@ -88,18 +136,22 @@ impl DnsCanisterConfig {
     ///
     /// the specified name is expected to be the domain name of the DnsCanisterRule,
     /// but may contain upper- or lower-case characters.
-    pub fn resolve_canister_id_from_name(&self, name: &str) -> Option<Principal> {
-        println!("resolve_canister_id_from_name {}", name);
-        self.rules
-            .iter()
-            .find_map(|rule| rule.lookup_name(&name))
-            //if not found find in redis
-            .or_else(|| {
+    pub async fn resolve_canister_id_from_name(
+        &self,
+        name: &str,
+        phonebook_param: Option<&PhoneBookCanisterParam>,
+    ) -> Option<Principal> {
+        //get canister from loaded rules then from redis cache.
+        let found_principal = match self.rules.iter().find_map(|rule| rule.lookup_name(&name)) {
+            Some(principal) => Some(principal),
+            None => {
                 //call redis if the cache is activated
-                self.redis_param.as_ref().and_then(|(redis_client, _)| {
-                    redis_client
-                        .get_connection()
-                        .and_then(|mut con| con.get::<_, String>(&name))
+                if let Some((redis_connection, _)) = self.redis_param.as_ref() {
+                    let mut redis_connection = redis_connection.as_ref().lock().await;
+
+                    redis_connection
+                        .get::<_, String>(&name)
+                        .await
                         .and_then(|s| {
                             println!("get canister id from redis: {}", s);
                             Principal::from_text(s).map_err(|_| {
@@ -110,30 +162,77 @@ impl DnsCanisterConfig {
                             })
                         })
                         .ok()
-                })
-            })
-            //if not found find in phone book canister.
-            .or_else(|| {
-                self.phonebook_id.and_then(|_phonebook_id| {
-                    //for test purpose to be removed with canister call
-                    let canister_id = "r5m5i-tiaaa-aaaaj-acgaq-cai".to_string();
-                    if let Some((_, redis_cache_tx)) = self.redis_param.as_ref() {
-                        if let Err(err) =
-                            redis_cache_tx.try_send((name.to_string(), canister_id.clone()))
-                        {
-                            self.logger.as_ref().map(|logger| {
-                                slog::error!(
+                } else {
+                    None
+                }
+            }
+        };
+
+        //don't use closure because of async call not compatible with.
+        //call phone book canister if not found.
+        if let None = found_principal {
+            if let Some(phone_book) = phonebook_param {
+                //let canister_id = "r5m5i-tiaaa-aaaaj-acgaq-cai".to_string();
+                let response = phone_book
+                    .agent
+                    .query(&phone_book.canister_id, "lookup")
+                    .with_arg(&Encode!(&name).ok()?)
+                    .call()
+                    .await
+                    .map_err(|err| {
+                        self.logger.as_ref().map(|logger| {
+                            slog::error!(
+                                logger,
+                                "Error Phone Book canister query call failed: {}",
+                                err
+                            )
+                        });
+                    })
+                    .ok()?;
+                let canister_list = Decode!(response.as_slice(), Option<Vec<Principal>>)
+                    .map_err(|err| {
+                        self.logger.as_ref().map(|logger| {
+                            slog::error!(
+                                logger,
+                                "Error during Phone Book canister reponse decoding: {}",
+                                err
+                            )
+                        });
+                    })
+                    .ok()?;
+
+                self.logger.as_ref().map(|logger| {
+                    slog::info!(
+                        logger,
+                        "Get canister id from phone book response: {:?}",
+                        canister_list
+                    )
+                });
+
+                let found_principal = canister_list.and_then(|canister_list| {
+                    (canister_list.len() > 0)
+                        .then(|| self.redis_param.as_ref())
+                        .and_then(|param| param)
+                        .map(|(_, redis_cache_tx)| {
+                            redis_cache_tx
+                                .try_send((name.to_string(), canister_list[0].to_string()))
+                                .map_err(|err| {
+                                    self.logger.as_ref().map(|logger| {
+                                        slog::error!(
                                     logger,
                                     "Error could not send canister_id to the Redis channel: {}",
                                     err
                                 )
-                            });
-                        }
-                    }
-
-                    Principal::from_text(canister_id).ok()
-                })
-            })
+                                    });
+                                })
+                                .ok();
+                            canister_list[0]
+                        })
+                });
+                return found_principal;
+            }
+        }
+        found_principal
     }
 
     /*
