@@ -1,12 +1,13 @@
-use crate::config::dns_canister_config::{DnsCanisterConfig, PhoneBookCanisterParam};
+use crate::canister::resolve_canister_id_from_uri;
+use crate::canister::PhoneBookCanisterParam;
+use crate::canister::{RealAccess, RedisParam};
 use clap::{crate_authors, crate_version, Parser};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use hyper::{
     body,
     body::Bytes,
-    http::uri::Parts,
     service::{make_service_fn, service_fn},
-    Body, Client, Request, Response, Server, StatusCode, Uri,
+    Body, Request, Response, Server, StatusCode, Uri,
 };
 use ic_agent::{
     agent::http_transport::ReqwestHttpReplicaV2Transport,
@@ -30,9 +31,8 @@ use std::{
     convert::Infallible,
     error::Error,
     io::Read,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::PathBuf,
-    str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -40,7 +40,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-mod config;
+mod canister;
+//mod config;
 mod logging;
 
 type HttpResponseAny = HttpResponse<Token, HttpRequestStreamingCallbackAny>;
@@ -95,10 +96,6 @@ pub(crate) struct Opts {
     #[clap(long, default_value = "http://localhost:8000/")]
     replica: Vec<String>,
 
-    /// An address to forward any requests from /_/
-    #[clap(long)]
-    proxy: Option<String>,
-
     /// Whether or not this is run in a debug context (e.g. errors returned in responses
     /// should show full stack and error details).
     #[clap(long)]
@@ -108,16 +105,6 @@ pub(crate) struct Opts {
     /// talking to the Internet Computer blockchain mainnet as it is unsecure.
     #[clap(long)]
     fetch_root_key: bool,
-
-    /// A map of domain names to canister IDs.
-    /// Format: domain.name:canister-id
-    #[clap(long)]
-    dns_alias: Vec<String>,
-
-    /// A list of domain name suffixes.  If found, the next (to the left) subdomain
-    /// is used as the Principal, if it parses as a Principal.
-    #[clap(long, default_value = "localhost")]
-    dns_suffix: Vec<String>,
 
     /// A map of domain names to canister IDs.
     /// Format: domain.name:canister-id
@@ -132,114 +119,6 @@ pub(crate) struct Opts {
     /// The address to bind to.
     #[clap(long, default_value = DEFAULT_REDIS_EXPIRY_CACHE_TIMEOUT_IN_SECOND)]
     redis_cache_timeout: usize,
-}
-
-/// Try to resolve a (canister ID, uri) from an HTTP Request. If it cannot be resolved,
-/// [None] will be returned.
-//REMOVED because host alias is not use. Remove unused function.
-/*fn resolve_canister_id(
-    request: &Request<Body>,
-    dns_canister_config: &DnsCanisterConfig,
-) -> (Option<Principal>, Option<String>) {
-    // Look for subdomains if there's a host header.
-    if let Some(host_header) = request.headers().get("Host") {
-        if let Ok(host) = host_header.to_str() {
-            if let Some(canister_id) = resolve_canister_id_from_hostname(host, dns_canister_config)
-            {
-                return (Some(canister_id), None);
-            }
-        }
-    }
-
-    // Look into the URI.
-    if let Some((canister_id, uri)) =
-        resolve_canister_id_from_uri(request.uri(), dns_canister_config)
-    {
-        return (Some(canister_id), Some(uri));
-    }
-
-    // Look into the request by header.
-    if let Some(referer_header) = request.headers().get("referer") {
-        if let Ok(referer) = referer_header.to_str() {
-            if let Ok(referer_uri) = hyper::Uri::from_str(referer) {
-                if let Some((canister_id, _)) =
-                    resolve_canister_id_from_uri(&referer_uri, dns_canister_config)
-                {
-                    return (Some(canister_id), None);
-                }
-            }
-        }
-    }
-
-    (None, None)
-}*/
-
-//REMOVED because host alias is not use. Remove unused function.
-/*fn resolve_canister_id_from_hostname(
-    hostname: &str,
-    dns_canister_config: &DnsCanisterConfig,
-) -> Option<Principal> {
-    let url = Uri::from_str(hostname).ok()?;
-
-    let split_hostname = url.host()?.split('.').collect::<Vec<&str>>();
-    let split_hostname = split_hostname.as_slice();
-
-    if let Some(principal) =
-        dns_canister_config.resolve_canister_id_from_split_hostname(split_hostname)
-    {
-        return Some(principal);
-    }
-    // Check if it's localhost or ic0.
-    match split_hostname {
-        [.., maybe_canister_id, "localhost"] => Principal::from_text(maybe_canister_id).ok(),
-        [maybe_canister_id, ..] => Principal::from_text(maybe_canister_id).ok(),
-        _ => None,
-    }
-}*/
-
-async fn resolve_canister_id_from_uri(
-    url: &hyper::Uri,
-    dns_canister_config: &DnsCanisterConfig,
-    phonebook_param: Option<&PhoneBookCanisterParam>,
-) -> Option<(Principal, String)> {
-    //    let (_, canister_id) = url::form_urlencoded::parse(url.query()?.as_bytes())
-    //        .find(|(name, _)| name == "canisterId")?;
-    //    Principal::from_text(canister_id.as_ref()).ok()
-
-    let mut segment = path_segments(url)?;
-    if let Some("-") = segment.next() {
-        let x = segment.next()?;
-        //detect if it's a canister id
-        let id = match Principal::from_text(x) {
-            Ok(id) => id,
-            //not a caniter if, try to see if it's an alias.
-            Err(_) => {
-                dns_canister_config
-                    .resolve_canister_id_from_name(x, phonebook_param)
-                    .await?
-            }
-        };
-
-        if let Some("-") = segment.next() {
-            //let y = segment.next()?;
-            let y = segment.map(|s| format!("/{}", s)).collect::<String>();
-            if y.len() != 0 {
-                //add query string.
-                let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
-                return Some((id, format!("/-{}", uri)));
-            }
-        }
-    }
-    None
-}
-
-pub fn path_segments(url: &hyper::Uri) -> Option<std::str::Split<'_, char>> {
-    let path = url.path();
-    if path.starts_with('/') {
-        Some(path[1..].split('/'))
-    } else {
-        None
-    }
 }
 
 fn decode_hash_tree(
@@ -334,22 +213,27 @@ fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> Heade
 async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
-    dns_canister_config: &DnsCanisterConfig,
+    redis_param: Option<&RedisParam>,
     phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
 ) -> Result<Response<Body>, Box<dyn Error>> {
-    let (canister_id, found_uri) =
-        match resolve_canister_id_from_uri(request.uri(), dns_canister_config, phonebook_param)
-            .await
-        {
-            None => {
-                return Ok(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body("Could not find a canister id to forward to.".into())
-                    .unwrap())
-            }
-            Some((x, y)) => (x, y),
-        };
+    let (canister_id, found_uri) = match resolve_canister_id_from_uri(
+        request.uri(),
+        redis_param,
+        phonebook_param,
+        RealAccess,
+        &logger,
+    )
+    .await
+    {
+        None => {
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("Could not find a canister id to forward to.".into())
+                .unwrap())
+        }
+        Some((x, y)) => (x, y),
+    };
 
     slog::trace!(
         logger,
@@ -722,92 +606,6 @@ fn validate_body(
     Ok(body_sha == tree_sha)
 }
 
-fn is_hop_header(name: &str) -> bool {
-    name.to_ascii_lowercase() == "connection"
-        || name.to_ascii_lowercase() == "keep-alive"
-        || name.to_ascii_lowercase() == "proxy-authenticate"
-        || name.to_ascii_lowercase() == "proxy-authorization"
-        || name.to_ascii_lowercase() == "te"
-        || name.to_ascii_lowercase() == "trailers"
-        || name.to_ascii_lowercase() == "transfer-encoding"
-        || name.to_ascii_lowercase() == "upgrade"
-}
-
-/// Returns a clone of the headers without the [hop-by-hop headers].
-///
-/// [hop-by-hop headers]: http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html
-fn remove_hop_headers(
-    headers: &hyper::header::HeaderMap<hyper::header::HeaderValue>,
-) -> hyper::header::HeaderMap<hyper::header::HeaderValue> {
-    let mut result = hyper::HeaderMap::new();
-    for (k, v) in headers.iter() {
-        if !is_hop_header(k.as_str()) {
-            result.insert(k.clone(), v.clone());
-        }
-    }
-    result
-}
-
-fn forward_uri<B>(forward_url: &str, req: &Request<B>) -> Result<Uri, Box<dyn Error>> {
-    let uri = Uri::from_str(forward_url)?;
-    let mut parts = Parts::from(uri);
-    parts.path_and_query = req.uri().path_and_query().cloned();
-
-    Ok(Uri::from_parts(parts)?)
-}
-
-fn create_proxied_request<B>(
-    client_ip: &IpAddr,
-    forward_url: &str,
-    mut request: Request<B>,
-) -> Result<Request<B>, Box<dyn Error>> {
-    *request.headers_mut() = remove_hop_headers(request.headers());
-    *request.uri_mut() = forward_uri(forward_url, &request)?;
-
-    let x_forwarded_for_header_name = "x-forwarded-for";
-
-    // Add forwarding information in the headers
-    match request.headers_mut().entry(x_forwarded_for_header_name) {
-        hyper::header::Entry::Vacant(entry) => {
-            entry.insert(client_ip.to_string().parse()?);
-        }
-
-        hyper::header::Entry::Occupied(mut entry) => {
-            let addr = format!("{}, {}", entry.get().to_str()?, client_ip);
-            entry.insert(addr.parse()?);
-        }
-    }
-
-    Ok(request)
-}
-
-async fn forward_api(
-    ip_addr: &IpAddr,
-    request: Request<Body>,
-    replica_url: &str,
-) -> Result<Response<Body>, Box<dyn Error>> {
-    let proxied_request = create_proxied_request(ip_addr, replica_url, request)?;
-
-    let client = Client::builder().build(hyper_tls::HttpsConnector::new());
-    let response = client.request(proxied_request).await?;
-    Ok(response)
-}
-
-fn not_found() -> Result<Response<Body>, Box<dyn Error>> {
-    Ok(Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body("Not found".into())?)
-}
-/*fn bad_request() -> Result<Response<Body>, Box<dyn Error>> {
-    Ok(Response::builder()
-        .status(StatusCode::BAD_REQUEST)
-        .body("Bad Request".into())?)
-}
-fn unauthorized() -> Result<Response<Body>, Box<dyn Error>> {
-    Ok(Response::builder()
-        .status(StatusCode::UNAUTHORIZED)
-        .body("Unauthorized".into())?)
-}*/
 fn ok() -> Result<Response<Body>, Box<dyn Error>> {
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -822,11 +620,9 @@ fn unable_to_fetch_root_key() -> Result<Response<Body>, Box<dyn Error>> {
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_request(
-    ip_addr: IpAddr,
     request: Request<Body>,
     replica_url: String,
-    proxy_url: Option<String>,
-    dns_canister_config: Arc<DnsCanisterConfig>,
+    redis_param: Arc<Option<RedisParam>>,
     phonebook_param: Option<PhoneBookCanisterParam>,
     logger: slog::Logger,
     fetch_root_key: bool,
@@ -840,61 +636,8 @@ async fn handle_request(
         request_uri_path
     );
 
-    let result = if request_uri_path.starts_with("/api/") {
-        slog::debug!(
-            logger,
-            "URI Request to path '{}' being forwarded to Replica",
-            &request.uri().path()
-        );
-        forward_api(&ip_addr, request, &replica_url).await
-    } else if request_uri_path.starts_with("/healthcheck") {
+    let result = if request_uri_path.starts_with("/healthcheck") {
         ok()
-    /*    } else if request_uri_path.starts_with("/admintag") {
-    //get Xkey to verify call.
-    if let Some(xapikey_header) = request.headers().get("X-API-KEY") {
-        if xapikey_header == "f69fdd4d-95c8-4aa1-966c-eaf791340946" {
-            //Extract tag/canister value.
-            if let Some(mut segments) = path_segments(request.uri()) {
-                segments.next(); //remove admintag
-                let res = segments
-                    .next()
-                    .and_then(|tag| segments.next().map(|canister_id| (tag, canister_id)))
-                    .map(|(tag, canister_id)| {
-                        dns_canister_config
-                            .write()
-                            .unwrap()
-                            .add_alias_rule(tag, canister_id)
-                    });
-                match res {
-                    None => bad_request(),
-                    Some(Err(_)) => bad_request(),
-                    Some(Ok(_)) => ok(),
-                }
-            } else {
-                bad_request()
-            }
-        } else {
-            unauthorized()
-        }
-    } else {
-        unauthorized()
-    } */
-    } else if request_uri_path.starts_with("/_/") && !request_uri_path.starts_with("/_/raw") {
-        if let Some(proxy_url) = proxy_url {
-            slog::debug!(
-                logger,
-                "URI Request to path '{}' being forwarded to proxy",
-                &request.uri().path(),
-            );
-            forward_api(&ip_addr, request, &proxy_url).await
-        } else {
-            slog::warn!(
-                logger,
-                "Unable to proxy {} because no --proxy is configured",
-                &request.uri().path()
-            );
-            not_found()
-        }
     } else {
         let agent = Arc::new(
             ic_agent::Agent::builder()
@@ -908,7 +651,7 @@ async fn handle_request(
             forward_request(
                 request,
                 agent,
-                dns_canister_config.as_ref(),
+                redis_param.as_ref().as_ref(),
                 phonebook_param.as_ref(),
                 logger.clone(),
             )
@@ -968,7 +711,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let counter = AtomicUsize::new(0);
     let debug = opts.debug;
-    let proxy_url = opts.proxy.clone();
     let fetch_root_key = opts.fetch_root_key;
 
     //create Redis cache update channel.
@@ -986,22 +728,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
 
     //create name alias resolution struct
-    let dns_canister_config: DnsCanisterConfig = runtime.block_on(async {
-        DnsCanisterConfig::new(
-            &opts.dns_alias,
-            &opts.dns_suffix,
-            Some((&opts.redis_url, redis_tx)),
-            Some(logger.clone()),
-        )
-        .await
-        .unwrap()
+    let redis_param: Option<RedisParam> = runtime.block_on(async {
+        RedisParam::try_new(Some(&opts.redis_url), Some(redis_tx), &logger).await
     });
-    let dns_canister_config = Arc::new(dns_canister_config);
+    let redis_param = Arc::new(redis_param);
 
-    let service = make_service_fn(|socket: &hyper::server::conn::AddrStream| {
-        let ip_addr = socket.remote_addr();
-        let ip_addr = ip_addr.ip();
-        let dns_canister_config = dns_canister_config.clone();
+    let service = make_service_fn(|_| {
+        let redis_param = redis_param.clone();
         let logger = logger.clone();
 
         // Select an agent.
@@ -1013,24 +746,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         let replica_url = replica_url.clone();
         slog::debug!(logger, "Replica URL: {}", replica_url);
 
-        let proxy_url = proxy_url.clone();
-
         let phone_book_id = opts.phonebook_id.clone();
 
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
                 let logger = logger.clone();
-                let dns_canister_config = dns_canister_config.clone();
+                let redis_param = redis_param.clone();
                 //update phone book canister call with network replica
                 let phonebook_param =
                     PhoneBookCanisterParam::new(&phone_book_id, &replica_url, &logger).ok();
 
                 handle_request(
-                    ip_addr,
                     req,
                     replica_url.clone(),
-                    proxy_url.clone(),
-                    dns_canister_config,
+                    redis_param,
                     phonebook_param,
                     logger,
                     fetch_root_key,
@@ -1068,82 +797,4 @@ fn main() -> Result<(), Box<dyn Error>> {
         server.await?;
         Ok(())
     })
-}
-
-#[cfg(test)]
-mod test {
-    use super::resolve_canister_id_from_uri;
-    use crate::config::dns_canister_config::DnsCanisterConfig;
-    use hyper::http::Uri;
-    #[tokio::test]
-    async fn test_resolve_canister_id_from_uri() {
-        let dns_aliases = ["uefa_nfts4g:r5m5i-tiaaa-aaaaj-acgaq-cai".to_string()];
-        let config = DnsCanisterConfig::new(&dns_aliases, &[], None, None)
-            .await
-            .unwrap();
-        let uri = "/-/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        let (canister_id, uri) = res.unwrap();
-        assert_eq!("/-/uefa_nfts4g_0", uri);
-        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
-        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/uefa_nfts4g_0"
-            .parse::<Uri>()
-            .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        let (canister_id, uri) = res.unwrap();
-        assert_eq!("/-/uefa_nfts4g_0", uri);
-        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
-
-        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        let (canister_id, uri) = res.unwrap();
-        assert_eq!("/-/1", uri);
-        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
-
-        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex"
-            .parse::<Uri>()
-            .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        let (canister_id, uri) = res.unwrap();
-        assert_eq!("/-/1/ex", uri);
-        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
-
-        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx"
-            .parse::<Uri>()
-            .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        let (canister_id, uri) = res.unwrap();
-        assert_eq!("/-/1/ex/yx", uri);
-        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
-
-        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx?q1=23&q2=33"
-            .parse::<Uri>()
-            .unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        let (canister_id, uri) = res.unwrap();
-        assert_eq!("/-/1/ex/yx?q1=23&q2=33", uri);
-        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
-
-        //https://nft.origyn.network/x/-/y => Error
-        let uri = "/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        assert!(res.is_none());
-        //https://nft.origyn.network/-/x/y => Error
-        let uri = "/-/uefa_nfts4g/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        assert!(res.is_none());
-        //uefa_nfts3g can't be converted to a canister_id
-        let uri = "/-/uefa_nfts3g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        assert!(res.is_none());
-
-        //https://nft.origyn.network/x/y => Error
-        let uri = "/uefa_nfts4g/uefa_nfts4g_0".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        assert!(res.is_none());
-        //https://nft.origyn.network/-/x => Error
-        let uri = "/-/uefa_nfts4g".parse::<Uri>().unwrap();
-        let res = resolve_canister_id_from_uri(&uri, &config, None).await;
-        assert!(res.is_none());
-    }
 }

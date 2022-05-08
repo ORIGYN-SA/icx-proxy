@@ -39,6 +39,7 @@ slog-async = "2"
 slog-term = "2"
 url = "2"
 redis = { version = "0.21.5", features = ["aio", "tokio-comp"] }
+async-trait = "0.1.53"
 
 
 [features]
