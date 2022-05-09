@@ -1,32 +1,70 @@
 # `icx-proxy`
 A command line tool to serve as a gateway for a Internet Computer replica.
 
-## specifing URI canister id alias
-Alias that map a uri tag to a canister id can be defined. The base pattern is
-
+## Uri convertion
+The proxy transform the incoming http request to a canister call and return the canister answer.
+The base transformation pattern is:
 https://nft.origyn.network/-/x/-/y/some/uri => x.ic0.app/-y/some/uri
 
-### Static definition of tag alias
-To define tag alias at startup, use the --dns-alias option of the icx-proxy, see the --help for more detail.
+x can be a canister id or an alias that is mapped to a canister id.
 
-Ex:
-```bash
-icx-proxy --dns-alias "uefa_nfts4g:r5m5i-tiaaa-aaaaj-acgaq-cai"
+### Example:
 ```
-to map uefa_nfts4g tag to r5m5i-tiaaa-aaaaj-acgaq-cai canister id.
+The url: https://nft.origyn.network/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/uefa_nfts4g_0 becomes https://r5m5i-tiaaa-aaaaj-acgaq-cai.ic0.app/-/uefa_nft4g_0 
 
-With this setting, this url: https://nft.origyn.network/-/uefa_nfts4g/-/uefa_nfts4g_0 becomes https://r5m5i-tiaaa-aaaaj-acgaq-cai.raw.ic0.app/-/uefa_nft4g_0 
+```
 
-### Dynamic setting of canister tag alias
-Canister alias can be defined dynamically using the entry point /admintag. The format is  /admintag/{tagname}/{canister_id}
+## Defining URI canister id alias
 
-The tag alias aren't persistent and must be defined after each restart. This entry is useful for test or to define a new canister id without restart. It should be added to the start command too so it'll be present after the next restart.
+Alias map the  uri x tag to a canister id.
 
-An authenticate X-API-KEY must be defined in the request: f69fdd4d-95c8-4aa1-966c-eaf791340946 to be authorized to add a tag alias.
+To map uefa_nfts4g tag to r5m5i-tiaaa-aaaaj-acgaq-cai canister id.
 
-Example of curl call: 
-```bash
- curl -v -H "X-API-KEY: f69fdd4d-95c8-4aa1-966c-eaf791340946" http://127.0.0.1:3000/admintag/newtag/r5m5i-tiaaa-aaaaj-acgaq-cai
+Example:
+```
+The url: https://nft.origyn.network/-/uefa_nfts4g/-/uefa_nfts4g_0 becomes https://r5m5i-tiaaa-aaaaj-acgaq-cai.raw.ic0.app/-/uefa_nft4g_0 
+
+```
+
+### Definition of alias
+
+Alias mapping is defined using the phone book canister.
+
+The interface is:
+```
+type PhoneBook = 
+ service {
+   insert: (Name, Canisters) -> (opt Canisters);
+   lookup: (Name) -> (opt vec Canister) query;
+   update_admin: (Canisters) -> (Canisters);
+ };
+type Name = text;
+type Canisters = vec Canister;
+type Canister = principal;
+service : (principal) -> PhoneBook
+```
+Alias are added using the insert canister call.
+
+## Alias use
+
+When the proxy server is call, the uri is decoded and if it found an alias in the uri, it's mapped to a canister id.
+The mapping is done as follow:
+ * call the Redis cache server to see if it exists in the cache.
+ * If not call the phone book canister with the lookup call.
+ * if not found, return an error.
+ * if an alias is found, call the canister mapped by the alias and return the answer
+ * if an alias is found and not present in the cache, add it after the end of the request.
+
+ 
+## Command line configuration
+To start the proxy, you must provide these parameters:
+ * --replica: define the IC network to connect to the canister. ex: "https://ic0.app" . Several replica can be defined to start multiple listener that connect to multiple IC network or sub network.
+ * --redis-url: The url to connect to the redis cache. ex: "redis://localhost:6379/". If a login/ pass is mandatory, it must be added to the url.
+ * --phonebook-id. Id of the phone book canister. ex: "ngrpb-5qaaa-aaaaj-adz7a-cai"
+
+Exemple of start command:
+```
+icx-proxy --replica "https://ic0.app" --redis-url "redis://tf-icx-proxy-redis-cluster-dev-us-east-1-ro.tvmdlr.ng.0001.use1.cache.amazonaws.com:6379" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 ```
 
 ## Health Check
