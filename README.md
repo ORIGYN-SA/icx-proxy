@@ -64,7 +64,7 @@ To start the proxy, you must provide these parameters:
 
 Exemple of start command:
 ```
-icx-proxy --replica "https://ic0.app" --redis-url "redis://tf-icx-proxy-redis-cluster-dev-us-east-1-ro.tvmdlr.ng.0001.use1.cache.amazonaws.com:6379" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
+icx-proxy --replica "https://ic0.app" --redis-url "redis://tf-icx-proxy-redis-cluster-dev-us-east-1.tvmdlr.ng.0001.use1.cache.amazonaws.com:6379" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 ```
 
 ## Health Check
