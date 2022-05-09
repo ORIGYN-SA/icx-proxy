@@ -62,10 +62,26 @@ To start the proxy, you must provide these parameters:
  * --redis-url: The url to connect to the redis cache. ex: "redis://localhost:6379/". If a login/ pass is mandatory, it must be added to the url.
  * --phonebook-id. Id of the phone book canister. ex: "ngrpb-5qaaa-aaaaj-adz7a-cai"
 
+Optional:
+ * redis-cache-timeout: define the timeout of acched data. Default 24h
+
 Exemple of start command:
 ```
 icx-proxy --replica "https://ic0.app" --redis-url "redis://tf-icx-proxy-redis-cluster-dev-us-east-1.tvmdlr.ng.0001.use1.cache.amazonaws.com:6379" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 ```
+## Example of connection test
+
+http://127.0.0.1:3000/-/uefa-nfts4g/-/uefa-nft4g-0
+http://127.0.0.1:3000/-/uefa_nfts4g/-/uefa-nft4g-0/info?query=owner
+http://127.0.0.1:3000/-/nftforgood_uffc/-/ogy.nftforgood_uffc.0
+http://127.0.0.1:3000/-/baycstage/-/bayc-0
+http://127.0.0.1:3000/-/baycdev/-/bayc-0
+
+## Redis local server
+docker run -p 6379:6379 redis:5.0
+
+## Start in local
+cargo run -- --debug -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 
 ## Health Check
 There an health check entry point to detect if the service is still running.
