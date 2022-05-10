@@ -7,7 +7,7 @@ terraform {
     backend "s3" {
       bucket     = "terraform-state-storage-us-east-1"
       region     = "us-east-1"
-      key        = "icx-proxy/sg-dev.tfstate"
+      key        = "icx-proxy/dev/sg.tfstate"
       profile    = "origyn-root"
     }
 }

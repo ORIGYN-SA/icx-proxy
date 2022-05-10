@@ -12,4 +12,10 @@ locals {
   ecs_execution_role_name        = "${local.name_prefix}-ecs-exec-role-${local.environment_short_name}"
   ecs_task_role_name             = "${local.name_prefix}-ecs-task-role-${local.environment_short_name}"
   ecs_task_sg                    = "${local.name_prefix}-ecs-task-sg-${local.environment_short_name}"
+  redis_sg_name                  = "${local.name_prefix}-redis-sg-${local.environment_short_name}"
+  redis_cluster                  = "${local.name_prefix}-redis-cluster-${local.environment_short_name}"
+  kms_name                       = "${local.name_prefix}-kms-${local.environment_short_name}"
+  kms_alias                      = "alias/${local.kms_name}"
+  db_username_ssm_parameter_name = "${local.name_prefix}-db-username-${local.environment_short_name}"
+  db_password_ssm_parameter_name = "${local.name_prefix}-db-password-${local.environment_short_name}"
 }

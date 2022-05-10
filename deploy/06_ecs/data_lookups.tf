@@ -34,3 +34,13 @@ data "aws_security_group" "ecs" {
     Name = local.ecs_task_sg
   }
 }
+data "aws_ssm_parameter" "db_username" {
+  name = local.db_username_ssm_parameter_name
+}
+
+data "aws_ssm_parameter" "db_password" {
+  name = local.db_password_ssm_parameter_name
+}
+data "aws_kms_key" "cmk" {
+  key_id = local.kms_alias
+}
