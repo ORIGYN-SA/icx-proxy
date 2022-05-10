@@ -217,8 +217,9 @@ async fn forward_request(
     phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
 ) -> Result<Response<Body>, Box<dyn Error>> {
+    let request_uri = request.uri();
     let (canister_id, found_uri) = match resolve_canister_id_from_uri(
-        request.uri(),
+        &request_uri,
         redis_param,
         phonebook_param,
         RealAccess,
@@ -244,6 +245,7 @@ async fn forward_request(
         canister_id,
         found_uri,
     );
+    let skip_validation = skip_validation(&request_uri);
 
     let (parts, body) = request.into_parts();
 
@@ -349,6 +351,7 @@ async fn forward_request(
     } else {
         None
     };
+
     let is_streaming = http_response.streaming_strategy.is_some();
     let response = if let Some(streaming_strategy) = http_response.streaming_strategy {
         let (mut sender, body) = body::Body::channel();
@@ -401,19 +404,21 @@ async fn forward_request(
 
         builder.body(body)?
     } else {
-        let body_valid = validate(
-            &headers_data,
-            &canister_id,
-            &agent,
-            &parts.uri,
-            &http_response.body,
-            logger.clone(),
-        );
-        if body_valid.is_err() {
-            return Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(body_valid.unwrap_err().into())
-                .unwrap());
+        if !skip_validation {
+            let body_valid = validate(
+                &headers_data,
+                &canister_id,
+                &agent,
+                &parts.uri,
+                &http_response.body,
+                logger.clone(),
+            );
+            if body_valid.is_err() {
+                return Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(body_valid.unwrap_err().into())
+                    .unwrap());
+            }
         }
         builder.body(http_response.body.into())?
     };
@@ -451,6 +456,12 @@ async fn forward_request(
     }
 
     Ok(response)
+}
+
+fn skip_validation(url: &hyper::Uri) -> bool {
+    url.query()
+        .map(|query| if query.contains("_raw") { true } else { false })
+        .unwrap_or(false)
 }
 
 fn validate(
@@ -628,15 +639,9 @@ async fn handle_request(
     fetch_root_key: bool,
     debug: bool,
 ) -> Result<Response<Body>, Infallible> {
-    let request_uri_path = request.uri().path();
-
-    slog::info!(
-        logger,
-        "handle_request.request_uri_path:{}",
-        request_uri_path
-    );
-
-    let result = if request_uri_path.starts_with("/healthcheck") {
+    let request_uri = request.uri();
+    slog::trace!(logger, "handle_request.request_uri:{}", request_uri);
+    let result = if request_uri.path().starts_with("/healthcheck") {
         ok()
     } else {
         let agent = Arc::new(
@@ -744,7 +749,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .get(count % replica_url_array.len())
             .unwrap_or_else(|| unreachable!());
         let replica_url = replica_url.clone();
-        slog::debug!(logger, "Replica URL: {}", replica_url);
+        slog::debug!(logger, "make service Replica URL: {}", replica_url);
 
         let phone_book_id = opts.phonebook_id.clone();
 

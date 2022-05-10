@@ -81,7 +81,18 @@ http://127.0.0.1:3000/-/baycdev/-/bayc-0
 docker run -p 6379:6379 redis:5.0
 
 ## Start in local
+```bash
 cargo run -- --debug -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
+```
+
+To add more trace add a -v 
+```bash
+cargo run -- --debug -v -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
+```
+## Skip validation
+Add the `_raw` tag to the URL query string to skip certificate validation of canister answer.
+ex:
+http://127.0.0.1:3000/-/uefa-nfts4g/-/uefa-nft4g-0?_raw_
 
 ## Health Check
 There an health check entry point to detect if the service is still running.

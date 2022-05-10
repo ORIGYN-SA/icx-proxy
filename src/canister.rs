@@ -335,6 +335,16 @@ mod test {
         assert_eq!("/-/1/ex/yx?q1=23&q2=33", uri);
         assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
 
+        let uri = "/-/r5m5i-tiaaa-aaaaj-acgaq-cai/-/1/ex/yx?_raw"
+            .parse::<Uri>()
+            .unwrap();
+        let res =
+            resolve_canister_id_from_uri(&uri, None, None, canister_resolver.clone(), &logger)
+                .await;
+        let (canister_id, uri) = res.unwrap();
+        assert_eq!("/-/1/ex/yx?_raw", uri);
+        assert_eq!("r5m5i-tiaaa-aaaaj-acgaq-cai", canister_id.to_string());
+
         //https://nft.origyn.network/x/-/y => Error
         let uri = "/uefa_nfts4g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
         let res =
