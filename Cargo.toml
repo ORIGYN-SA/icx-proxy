@@ -1,6 +1,6 @@
 [package]
 name = "icx-proxy"
-version = "0.9.0"
+version = "0.9.2"
 authors = ["DFINITY Stiftung <sdk@dfinity.org>"]
 edition = "2018"
 description = "CLI tool to create an HTTP proxy to the Internet Computer."
@@ -22,7 +22,7 @@ base64 = "0.13"
 candid = { version = "0.7", features = ["mute_warnings"] }
 clap = { version = "3", features = ["cargo", "derive"] }
 flate2 = "1.0.0"
-garcon = { version = "0.2", features = ["async"] }
+garcon = { version = "0.2.3", features = ["async"] }
 hex = "0.4"
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"
@@ -38,6 +38,9 @@ slog = { version = "2", features = ["max_level_trace"] }
 slog-async = "2"
 slog-term = "2"
 url = "2"
+redis = { version = "0.21.5", features = ["aio", "tokio-comp"] }
+async-trait = "0.1.53"
+
 
 [features]
 skip_body_verification = []
