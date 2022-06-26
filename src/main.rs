@@ -3,6 +3,7 @@ use crate::canister::PhoneBookCanisterParam;
 use crate::canister::{RealAccess, RedisParam};
 use clap::{crate_authors, crate_version, Parser};
 use flate2::read::{DeflateDecoder, GzDecoder};
+use hyper::body::HttpBody;
 use hyper::{
     body,
     body::Bytes,
@@ -27,6 +28,7 @@ use lazy_regex::regex_captures;
 use redis::Commands;
 use sha2::{Digest, Sha256};
 use slog::Drain;
+use std::borrow::Cow;
 use std::{
     convert::Infallible,
     error::Error,
@@ -210,6 +212,11 @@ fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> Heade
     headers_data
 }
 
+enum ForwardRequestResponse {
+    RedirectUrl(String),
+    Response(Result<Response<Body>, Box<dyn Error>>),
+}
+
 async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
@@ -217,10 +224,12 @@ async fn forward_request(
     phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
     canister_params: TargetCanisterParams,
-) -> Result<Response<Body>, Box<dyn Error>> {
-    let ( canister_id, found_uri ) = match canister_params.clone() {
-        TargetCanisterParams { canister_id, found_uri } => (canister_id, found_uri)
-    };
+) -> Result<ForwardRequestResponse, Box<dyn Error>> {
+    let TargetCanisterParams {
+        canister_id,
+        found_uri,
+    } = canister_params;
+
     let request_uri = request.uri();
 
     slog::trace!(
@@ -299,10 +308,31 @@ async fn forward_request(
         }
     }
 
+    type QueryResponse = HttpResponse<Token, HttpRequestStreamingCallbackAny>;
+
+    fn is_redirect(query_response: &QueryResponse) -> Option<String> {
+        if query_response.status_code == StatusCode::TEMPORARY_REDIRECT {
+            let query_response_headers = query_response.headers.iter().collect::<Vec<_>>();
+            let query_response_headers_slice = query_response_headers.as_slice();
+
+            match query_response_headers_slice {
+                [HeaderField(name, value)] if name == "Location" => Some(value.to_string()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
     let http_response = match handle_result(query_result) {
         Ok(http_response) => http_response,
-        Err(response_or_error) => return response_or_error,
+        Err(response_or_error) => return Ok(ForwardRequestResponse::Response(response_or_error)),
     };
+
+    if let Some(redirect_url) = is_redirect(&http_response) {
+        slog::trace!(logger, ">> 307 Redirect to {}", redirect_url);
+        return Ok(ForwardRequestResponse::RedirectUrl(redirect_url));
+    }
 
     let http_response = if http_response.upgrade == Some(true) {
         let waiter = garcon::Delay::builder()
@@ -320,7 +350,9 @@ async fn forward_request(
             .await;
         let http_response = match handle_result(update_result) {
             Ok(http_response) => http_response,
-            Err(response_or_error) => return response_or_error,
+            Err(response_or_error) => {
+                return Ok(ForwardRequestResponse::Response(response_or_error))
+            }
         };
         http_response
     } else {
@@ -401,10 +433,10 @@ async fn forward_request(
                 logger.clone(),
             );
             if body_valid.is_err() {
-                return Ok(Response::builder()
+                return Ok(ForwardRequestResponse::Response(Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(body_valid.unwrap_err().into())
-                    .unwrap());
+                    .unwrap())));
             }
         }
         builder.body(http_response.body.into())?
@@ -442,7 +474,7 @@ async fn forward_request(
         );
     }
 
-    Ok(response)
+    Ok(ForwardRequestResponse::Response(Ok(response)))
 }
 
 fn skip_validation(url: &hyper::Uri) -> bool {
@@ -619,7 +651,7 @@ fn unable_to_fetch_root_key() -> Result<Response<Body>, Box<dyn Error>> {
 #[derive(Clone, Debug)]
 pub struct TargetCanisterParams {
     canister_id: Principal,
-    found_uri:  String,
+    found_uri: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -664,14 +696,19 @@ async fn handle_request(
                 }
                 Some((x, y)) => (x, y),
             };
-        
+
+            
+
             forward_request(
                 request,
                 agent,
                 redis_param.as_ref().as_ref(),
                 phonebook_param.as_ref(),
                 logger.clone(),
-                TargetCanisterParams { canister_id, found_uri },
+                TargetCanisterParams {
+                    canister_id,
+                    found_uri,
+                },
             )
             .await
         }
