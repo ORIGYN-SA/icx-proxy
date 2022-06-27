@@ -1,7 +1,6 @@
 use crate::canister::resolve_canister_id_from_uri;
 use crate::canister::PhoneBookCanisterParam;
 use crate::canister::{RealAccess, RedisParam};
-use async_recursion::async_recursion;
 use clap::{crate_authors, crate_version, Parser};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use hyper::body::HttpBody;
@@ -42,6 +41,7 @@ use std::{
     },
 };
 use tokio::sync::mpsc;
+use async_recursion::async_recursion;
 
 mod canister;
 //mod config;
@@ -665,7 +665,7 @@ async fn handle_request(
     logger: slog::Logger,
     fetch_root_key: bool,
     debug: bool,
-) -> Response<Body> {
+) -> Result<Response<Body>, Infallible> {
     let request_uri = request.uri();
     let redirect_request_method = request.method().clone(); //used for redirects if needed
     slog::trace!(logger, "handle_request.request_uri:{}", request_uri);
