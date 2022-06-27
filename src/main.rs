@@ -647,6 +647,7 @@ async fn handle_request(
             unable_to_fetch_root_key()
         } else {
             let request_uri = request.uri();
+            slog::trace!(logger, "Request URI: {:?}", request_uri.clone());
             let (canister_id, found_uri) = match resolve_canister_id_from_uri(
                 &request_uri,
                 redis_param.as_ref().as_ref(),

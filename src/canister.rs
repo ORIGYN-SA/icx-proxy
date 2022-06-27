@@ -111,6 +111,11 @@ pub async fn resolve_canister_id_from_uri(
     let mut segment = path_segments(url)?;
     if let Some("-") = segment.next() {
         let x = segment.next()?;
+        slog::info!(
+            logger,
+            "FIRST SEGMENT AS CANISTER IDENTYFIER: {:?}",
+            x.clone(),
+        );
         //detect if it's a canister id
         let id = match Principal::from_text(x) {
             Ok(id) => id,
@@ -122,9 +127,18 @@ pub async fn resolve_canister_id_from_uri(
             }
         };
 
-        if let Some("-") = segment.next() {
-            //let y = segment.next()?;
-            let y = segment.map(|s| format!("/{}", s)).collect::<String>();
+        if let Some(collection) = segment.next() {
+            let mut y = segment.clone().map(|s| format!("/{}", s)).collect::<String>();
+            // detect if collection present in link 
+            if collection.len() != 0 && String::from(collection.clone()).ne(&String::from("-")) {
+                y = format!("/{}{}", collection, segment.map(|s| format!("/{}", s)).collect::<String>());
+                slog::info!(
+                    logger,
+                    "SEGMENTS NEXT AFTER CANISTER ID: {:?}",
+                    y.clone(),
+                );
+            }
+
             if y.len() != 0 {
                 //add query string.
                 let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
