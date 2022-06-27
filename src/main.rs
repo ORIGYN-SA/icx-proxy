@@ -216,25 +216,12 @@ async fn forward_request(
     redis_param: Option<&RedisParam>,
     phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
+    canister_params: TargetCanisterParams,
 ) -> Result<Response<Body>, Box<dyn Error>> {
-    let request_uri = request.uri();
-    let (canister_id, found_uri) = match resolve_canister_id_from_uri(
-        &request_uri,
-        redis_param,
-        phonebook_param,
-        RealAccess,
-        &logger,
-    )
-    .await
-    {
-        None => {
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("Could not find a canister id to forward to.".into())
-                .unwrap())
-        }
-        Some((x, y)) => (x, y),
+    let ( canister_id, found_uri ) = match canister_params.clone() {
+        TargetCanisterParams { canister_id, found_uri } => (canister_id, found_uri)
     };
+    let request_uri = request.uri();
 
     slog::trace!(
         logger,
@@ -308,7 +295,7 @@ async fn forward_request(
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(format!(r#"Replica Error ({}): "{}""#, reject_code, reject_message).into())
                 .unwrap())),
-            Err(e) => Err(Err(e.into())),
+            Err(e) => Err(Err(e.into())), // <-- PLACE TO HANDLE 307 REDIRECT WITH RECURSION>
         }
     }
 
@@ -629,6 +616,12 @@ fn unable_to_fetch_root_key() -> Result<Response<Body>, Box<dyn Error>> {
         .body("Unable to fetch root key".into())?)
 }
 
+#[derive(Clone, Debug)]
+pub struct TargetCanisterParams {
+    canister_id: Principal,
+    found_uri:  String,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_request(
     request: Request<Body>,
@@ -653,12 +646,33 @@ async fn handle_request(
         if fetch_root_key && agent.fetch_root_key().await.is_err() {
             unable_to_fetch_root_key()
         } else {
+            let request_uri = request.uri();
+            slog::trace!(logger, "Request URI: {:?}", request_uri.clone());
+            let (canister_id, found_uri) = match resolve_canister_id_from_uri(
+                &request_uri,
+                redis_param.as_ref().as_ref(),
+                phonebook_param.as_ref(),
+                RealAccess,
+                &logger,
+            )
+            .await
+            {
+                None => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body("Could not find a canister id to forward to.".into())
+                        .unwrap())
+                }
+                Some((x, y)) => (x, y),
+            };
+        
             forward_request(
                 request,
                 agent,
                 redis_param.as_ref().as_ref(),
                 phonebook_param.as_ref(),
                 logger.clone(),
+                TargetCanisterParams { canister_id, found_uri },
             )
             .await
         }
