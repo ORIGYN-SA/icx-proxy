@@ -872,7 +872,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     logger,
                     fetch_root_key,
                     debug,
-                ).as_ref()
+                )
             }))
         }
     });
