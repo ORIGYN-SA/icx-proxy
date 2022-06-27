@@ -1,10 +1,8 @@
 use crate::canister::resolve_canister_id_from_uri;
 use crate::canister::PhoneBookCanisterParam;
 use crate::canister::{RealAccess, RedisParam};
-use async_recursion::async_recursion;
 use clap::{crate_authors, crate_version, Parser};
 use flate2::read::{DeflateDecoder, GzDecoder};
-use hyper::body::HttpBody;
 use hyper::{
     body,
     body::Bytes,
@@ -29,7 +27,6 @@ use lazy_regex::regex_captures;
 use redis::Commands;
 use sha2::{Digest, Sha256};
 use slog::Drain;
-use std::borrow::Cow;
 use std::{
     convert::Infallible,
     error::Error,
@@ -213,11 +210,6 @@ fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> Heade
     headers_data
 }
 
-enum ForwardRequestResponse {
-    RedirectUrl(String),
-    Response(Result<Response<Body>, Box<dyn Error>>),
-}
-
 async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
@@ -225,12 +217,10 @@ async fn forward_request(
     phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
     canister_params: TargetCanisterParams,
-) -> Result<ForwardRequestResponse, Box<dyn Error>> {
-    let TargetCanisterParams {
-        canister_id,
-        found_uri,
-    } = canister_params;
-
+) -> Result<Response<Body>, Box<dyn Error>> {
+    let ( canister_id, found_uri ) = match canister_params.clone() {
+        TargetCanisterParams { canister_id, found_uri } => (canister_id, found_uri)
+    };
     let request_uri = request.uri();
 
     slog::trace!(
@@ -309,31 +299,10 @@ async fn forward_request(
         }
     }
 
-    type QueryResponse = HttpResponse<Token, HttpRequestStreamingCallbackAny>;
-
-    fn is_redirect(query_response: &QueryResponse) -> Option<String> {
-        if query_response.status_code == StatusCode::TEMPORARY_REDIRECT {
-            let query_response_headers = query_response.headers.iter().collect::<Vec<_>>();
-            let query_response_headers_slice = query_response_headers.as_slice();
-
-            match query_response_headers_slice {
-                [HeaderField(name, value)] if name == "Location" => Some(value.to_string()),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    }
-
     let http_response = match handle_result(query_result) {
         Ok(http_response) => http_response,
-        Err(response_or_error) => return Ok(ForwardRequestResponse::Response(response_or_error)),
+        Err(response_or_error) => return response_or_error,
     };
-
-    if let Some(redirect_url) = is_redirect(&http_response) {
-        slog::trace!(logger, ">> 307 Redirect to {}", redirect_url);
-        return Ok(ForwardRequestResponse::RedirectUrl(redirect_url));
-    }
 
     let http_response = if http_response.upgrade == Some(true) {
         let waiter = garcon::Delay::builder()
@@ -351,9 +320,7 @@ async fn forward_request(
             .await;
         let http_response = match handle_result(update_result) {
             Ok(http_response) => http_response,
-            Err(response_or_error) => {
-                return Ok(ForwardRequestResponse::Response(response_or_error))
-            }
+            Err(response_or_error) => return response_or_error,
         };
         http_response
     } else {
@@ -434,10 +401,10 @@ async fn forward_request(
                 logger.clone(),
             );
             if body_valid.is_err() {
-                return Ok(ForwardRequestResponse::Response(Ok(Response::builder()
+                return Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(body_valid.unwrap_err().into())
-                    .unwrap())));
+                    .unwrap());
             }
         }
         builder.body(http_response.body.into())?
@@ -475,7 +442,7 @@ async fn forward_request(
         );
     }
 
-    Ok(ForwardRequestResponse::Response(Ok(response)))
+    Ok(response)
 }
 
 fn skip_validation(url: &hyper::Uri) -> bool {
@@ -652,10 +619,9 @@ fn unable_to_fetch_root_key() -> Result<Response<Body>, Box<dyn Error>> {
 #[derive(Clone, Debug)]
 pub struct TargetCanisterParams {
     canister_id: Principal,
-    found_uri: String,
+    found_uri:  String,
 }
 
-#[async_recursion]
 #[allow(clippy::too_many_arguments)]
 async fn handle_request(
     request: Request<Body>,
@@ -665,16 +631,15 @@ async fn handle_request(
     logger: slog::Logger,
     fetch_root_key: bool,
     debug: bool,
-) -> Response<Body> {
+) -> Result<Response<Body>, Infallible> {
     let request_uri = request.uri();
-    let redirect_request_method = request.method().clone(); //used for redirects if needed
     slog::trace!(logger, "handle_request.request_uri:{}", request_uri);
     let result = if request_uri.path().starts_with("/healthcheck") {
         ok()
     } else {
         let agent = Arc::new(
             ic_agent::Agent::builder()
-                .with_transport(ReqwestHttpReplicaV2Transport::create(replica_url.clone()).unwrap())
+                .with_transport(ReqwestHttpReplicaV2Transport::create(replica_url).unwrap())
                 .build()
                 .expect("Could not create agent..."),
         );
@@ -699,71 +664,16 @@ async fn handle_request(
                 }
                 Some((x, y)) => (x, y),
             };
-
-            let result = forward_request(
+        
+            forward_request(
                 request,
                 agent,
                 redis_param.as_ref().as_ref(),
                 phonebook_param.as_ref(),
                 logger.clone(),
-                TargetCanisterParams {
-                    canister_id,
-                    found_uri,
-                },
+                TargetCanisterParams { canister_id, found_uri },
             )
-            .await;
-
-            match result {
-                Ok(ForwardRequestResponse::RedirectUrl(redirect_url)) => {
-                    //new request
-                    let builder = Request::builder();
-                    let new_request = builder
-                        .method(redirect_request_method)
-                        .uri(redirect_url)
-                        .body(request.into_body());
-                    // let new_request = builder.body(request.into_body());
-
-                    match new_request {
-                        Ok(new_request) => {
-                            let response = handle_request(
-                                new_request,
-                                replica_url,
-                                redis_param,
-                                phonebook_param,
-                                logger.clone(),
-                                fetch_root_key,
-                                debug,
-                            )
-                            .await;
-
-                            match response {
-                                Ok(response) => Ok(response),
-                                Err(e) => Ok(Response::builder()
-                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                    .body("Error forwarding request".into())
-                                    .unwrap()),
-                            }
-                        }
-                        Err(e) => {
-                            // slog::error!(logger, "Error creating new request: {}", e);
-                            Ok(Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body("Error creating new request".into())
-                                .unwrap())
-                        }
-                    }
-                    // let new_request = builder.build();
-                }
-                Ok(ForwardRequestResponse::Response(response)) => response,
-                Ok(ForwardRequestResponse::Response(e)) => e,
-                Err(e) => {
-                    slog::error!(logger, ">> Error forwarding request: {}", e);
-                    return Ok(Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body("Error forwarding request".into())
-                        .unwrap());
-                }
-            }
+            .await
         }
     };
 
@@ -872,7 +782,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     logger,
                     fetch_root_key,
                     debug,
-                ).as_ref()
+                )
             }))
         }
     });

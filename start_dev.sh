@@ -1,0 +1,1 @@
+./target/debug/icx-proxy --replica "http://localhost:8000" --redis-url "redis://localhost:6879/" --phonebook-id  "rrkah-fqaaa-aaaaa-aaaaq-cai"
