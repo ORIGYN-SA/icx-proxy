@@ -137,11 +137,24 @@ pub async fn resolve_canister_id_from_uri(
                     "SEGMENTS NEXT AFTER CANISTER ID: {:?}",
                     y.clone(),
                 );
+                //add query string.
+                let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
+                slog::info!(
+                    logger,
+                    "COLLECTION URI WITH QUERY STRING: {:?}",
+                    uri.clone(),
+                );
+                return Some((id, uri));
             }
 
             if y.len() != 0 {
                 //add query string.
                 let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
+                slog::info!(
+                    logger,
+                    "REGULAR URI WITH QUERY STRING: {:?}",
+                    uri.clone(),
+                );
                 return Some((id, format!("/-{}", uri)));
             }
         }
