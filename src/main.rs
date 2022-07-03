@@ -702,7 +702,7 @@ async fn handle_request(
         }
     };
 
-    let ForwardRequestParams { body,  parts } = forward_request_params;
+    let ForwardRequestParams { body, parts } = forward_request_params;
     let request_uri = &parts.uri;
     slog::trace!(logger, "handle_request.request_uri:{}", &request_uri);
     let result = if request_uri.path().starts_with("/healthcheck") {
@@ -734,24 +734,26 @@ async fn handle_request(
                 }
                 Some((x, y)) => (x, y),
             };
+
+            //cloning the request, because using the original request will take ownership of the request, but we want to keep it in case we need to redirect.
             let headers = parts.headers.clone();
             let method = parts.method.clone();
             let uri = parts.uri.clone();
             let version = parts.version.clone();
 
-            let mut nr = Request::builder()
+            //we need to build a new request, not to be used directly but to get the parts we need. Because the hyper library doesn't allow you create Parts directly.
+            let mut normal_request = Request::builder()
                 .method(method)
                 .uri(uri)
                 .version(version)
-                // .headers(headers)
                 .body(())
-                .unwrap();
-            nr.headers_mut().extend(headers);
+                .expect("Could not create request");
+            normal_request.headers_mut().extend(headers);
 
             let result = forward_request(
                 ForwardRequestParams {
                     body: body.clone(),
-                    parts: nr.into_parts().0,
+                    parts: normal_request.into_parts().0,
                 },
                 agent,
                 redis_param.as_ref().as_ref(),
@@ -766,18 +768,17 @@ async fn handle_request(
 
             match result {
                 Ok(ForwardRequestResponse::RedirectUrl(redirect_url)) => {
-                    let mut nr = Request::builder()
+                    let mut redirect_request = Request::builder()
                         .method(parts.method)
                         .uri(redirect_url)
                         .version(parts.version)
-                        // .headers(headers)
                         .body(Body::from(body))
-                        .unwrap();
-                    
-                    nr.headers_mut().extend(parts.headers);
+                        .expect("Could not create redirect request");
+                    redirect_request.headers_mut().extend(parts.headers);
 
+                    //recursive call to handle redirects.
                     let response = handle_request(
-                        nr,
+                        redirect_request,
                         replica_url,
                         redis_param,
                         phonebook_param,
