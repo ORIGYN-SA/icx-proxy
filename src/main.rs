@@ -1,9 +1,11 @@
 use crate::canister::resolve_canister_id_from_uri;
 use crate::canister::PhoneBookCanisterParam;
 use crate::canister::{RealAccess, RedisParam};
+use async_recursion::async_recursion;
 use clap::{crate_authors, crate_version, Parser};
 use flate2::read::{DeflateDecoder, GzDecoder};
-use hyper::body::HttpBody;
+use hyper::http::request::Parts;
+
 use hyper::{
     body,
     body::Bytes,
@@ -28,7 +30,6 @@ use lazy_regex::regex_captures;
 use redis::Commands;
 use sha2::{Digest, Sha256};
 use slog::Drain;
-use std::borrow::Cow;
 use std::{
     convert::Infallible,
     error::Error,
@@ -41,7 +42,6 @@ use std::{
     },
 };
 use tokio::sync::mpsc;
-use async_recursion::async_recursion;
 
 mod canister;
 //mod config;
@@ -215,37 +215,49 @@ fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> Heade
 
 enum ForwardRequestResponse {
     RedirectUrl(String),
-    Response(Result<Response<Body>, Box<dyn Error>>),
+    Response(Result<Response<Body>, anyhow::Error>),
+}
+
+// #[derive(Clone)]
+struct ForwardRequestParams {
+    body: Vec<u8>,
+    parts: Parts,
+}
+
+//From Request to ForwardRequestParams
+async fn extract_forward_request_params<'a>(
+    request: Request<Body>,
+) -> Result<ForwardRequestParams, anyhow::Error> {
+    let (parts, body) = request.into_parts();
+
+    let body = body::to_bytes(body).await?.to_vec();
+    Ok(ForwardRequestParams { body, parts })
 }
 
 async fn forward_request(
-    request: Request<Body>,
+    request: ForwardRequestParams,
     agent: Arc<Agent>,
-    redis_param: Option<&RedisParam>,
-    phonebook_param: Option<&PhoneBookCanisterParam>,
+    _redis_param: Option<&RedisParam>,
+    _phonebook_param: Option<&PhoneBookCanisterParam>,
     logger: slog::Logger,
     canister_params: TargetCanisterParams,
-) -> Result<ForwardRequestResponse, Box<dyn Error>> {
+) -> Result<ForwardRequestResponse, anyhow::Error> {
+    let ForwardRequestParams { body, parts } = request;
     let TargetCanisterParams {
         canister_id,
         found_uri,
     } = canister_params;
 
-    let request_uri = request.uri();
-
     slog::trace!(
         logger,
         "<< {} {} {:?} resolved to {}/-/{}",
-        request.method(),
-        request.uri(),
-        &request.version(),
+        &parts.method,
+        &parts.uri,
+        &parts.version,
         canister_id,
         found_uri,
     );
-    let skip_validation = skip_validation(&request_uri);
-
-    let (parts, body) = request.into_parts();
-
+    let skip_validation = skip_validation(&parts.uri);
     let method = parts.method;
     let headers = parts
         .headers
@@ -261,13 +273,9 @@ async fn forward_request(
         })
         .collect::<Vec<_>>();
 
-    let entire_body = body::to_bytes(body).await?.to_vec();
-
     slog::trace!(logger, "<<");
     if logger.is_trace_enabled() {
-        let body = String::from_utf8_lossy(
-            &entire_body[0..usize::min(entire_body.len(), MAX_LOG_BODY_SIZE)],
-        );
+        let body = String::from_utf8_lossy(&body[0..usize::min(body.len(), MAX_LOG_BODY_SIZE)]);
         slog::trace!(
             logger,
             "<< \"{}\"{}",
@@ -286,14 +294,14 @@ async fn forward_request(
             method.as_str(),
             found_uri.as_str(),
             headers.iter().cloned(),
-            &entire_body,
+            &body,
         )
         .call()
         .await;
 
     fn handle_result(
         result: Result<(HttpResponseAny,), AgentError>,
-    ) -> Result<HttpResponseAny, Result<Response<Body>, Box<dyn Error>>> {
+    ) -> Result<HttpResponseAny, Result<Response<Body>, anyhow::Error>> {
         // If the result is a Replica error, returns the 500 code and message. There is no information
         // leak here because a user could use `dfx` to get the same reply.
         match result {
@@ -345,7 +353,7 @@ async fn forward_request(
                 method.as_str(),
                 found_uri.as_str(),
                 headers.iter().cloned(),
-                &entire_body,
+                &body,
             )
             .call_and_wait(waiter)
             .await;
@@ -637,13 +645,13 @@ fn validate_body(
     Ok(body_sha == tree_sha)
 }
 
-fn ok() -> Result<Response<Body>, Box<dyn Error>> {
+fn ok() -> Result<Response<Body>, anyhow::Error> {
     Ok(Response::builder()
         .status(StatusCode::OK)
         .body("OK".into())?)
 }
 
-fn unable_to_fetch_root_key() -> Result<Response<Body>, Box<dyn Error>> {
+fn unable_to_fetch_root_key() -> Result<Response<Body>, anyhow::Error> {
     Ok(Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body("Unable to fetch root key".into())?)
@@ -654,6 +662,22 @@ pub struct TargetCanisterParams {
     canister_id: Principal,
     found_uri: String,
 }
+
+// fn clone_request(request: &Request<Body>) -> impl FnOnce(String) -> Request<Body> {
+//     let (parts, body) = request.into_parts();
+//     // let method = request.method().clone();
+//     // let headers = request.headers().clone();
+
+//     // let body = request.body().concat
+
+//     |new_url| {
+//         let new_request = Request::from_parts(Parts {
+//             uri: new_url.parse().unwrap(),
+//             ..parts
+//         }, body);
+//         new_request
+//     }
+// }
 
 #[async_recursion]
 #[allow(clippy::too_many_arguments)]
@@ -666,9 +690,21 @@ async fn handle_request(
     fetch_root_key: bool,
     debug: bool,
 ) -> Result<Response<Body>, Infallible> {
-    let request_uri = request.uri();
-    let redirect_request_method = request.method().clone(); //used for redirects if needed
-    slog::trace!(logger, "handle_request.request_uri:{}", request_uri);
+    // let redirect_request = clone_request(&request);
+    let forward_request_params = match extract_forward_request_params(request).await {
+        Ok(params) => params,
+        Err(e) => {
+            slog::error!(logger, ">> Failed to extract forward request params: {}", e);
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to extract forward request params".into())
+                .unwrap());
+        }
+    };
+
+    let ForwardRequestParams { body,  parts } = forward_request_params;
+    let request_uri = &parts.uri;
+    slog::trace!(logger, "handle_request.request_uri:{}", &request_uri);
     let result = if request_uri.path().starts_with("/healthcheck") {
         ok()
     } else {
@@ -681,7 +717,6 @@ async fn handle_request(
         if fetch_root_key && agent.fetch_root_key().await.is_err() {
             unable_to_fetch_root_key()
         } else {
-            let request_uri = request.uri();
             let (canister_id, found_uri) = match resolve_canister_id_from_uri(
                 &request_uri,
                 redis_param.as_ref().as_ref(),
@@ -699,9 +734,25 @@ async fn handle_request(
                 }
                 Some((x, y)) => (x, y),
             };
+            let headers = parts.headers.clone();
+            let method = parts.method.clone();
+            let uri = parts.uri.clone();
+            let version = parts.version.clone();
+
+            let mut nr = Request::builder()
+                .method(method)
+                .uri(uri)
+                .version(version)
+                // .headers(headers)
+                .body(())
+                .unwrap();
+            nr.headers_mut().extend(headers);
 
             let result = forward_request(
-                request,
+                ForwardRequestParams {
+                    body: body.clone(),
+                    parts: nr.into_parts().0,
+                },
                 agent,
                 redis_param.as_ref().as_ref(),
                 phonebook_param.as_ref(),
@@ -715,47 +766,38 @@ async fn handle_request(
 
             match result {
                 Ok(ForwardRequestResponse::RedirectUrl(redirect_url)) => {
-                    //new request
-                    let builder = Request::builder();
-                    let new_request = builder
-                        .method(redirect_request_method)
+                    let mut nr = Request::builder()
+                        .method(parts.method)
                         .uri(redirect_url)
-                        .body(request.into_body());
-                    // let new_request = builder.body(request.into_body());
+                        .version(parts.version)
+                        // .headers(headers)
+                        .body(Body::from(body))
+                        .unwrap();
+                    
+                    nr.headers_mut().extend(parts.headers);
 
-                    match new_request {
-                        Ok(new_request) => {
-                            let response = handle_request(
-                                new_request,
-                                replica_url,
-                                redis_param,
-                                phonebook_param,
-                                logger.clone(),
-                                fetch_root_key,
-                                debug,
-                            )
-                            .await;
+                    let response = handle_request(
+                        nr,
+                        replica_url,
+                        redis_param,
+                        phonebook_param,
+                        logger.clone(),
+                        fetch_root_key,
+                        debug,
+                    )
+                    .await;
 
-                            match response {
-                                Ok(response) => Ok(response),
-                                Err(e) => Ok(Response::builder()
-                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                    .body("Error forwarding request".into())
-                                    .unwrap()),
-                            }
-                        }
-                        Err(e) => {
-                            // slog::error!(logger, "Error creating new request: {}", e);
-                            Ok(Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body("Error creating new request".into())
-                                .unwrap())
-                        }
+                    match response {
+                        Ok(response) => Ok(response),
+                        _ => Ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body("Error forwarding request".into())
+                            .unwrap()),
                     }
-                    // let new_request = builder.build();
                 }
+
                 Ok(ForwardRequestResponse::Response(response)) => response,
-                Ok(ForwardRequestResponse::Response(e)) => e,
+
                 Err(e) => {
                     slog::error!(logger, ">> Error forwarding request: {}", e);
                     return Ok(Response::builder()

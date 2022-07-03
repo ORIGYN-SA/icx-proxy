@@ -104,10 +104,6 @@ pub async fn resolve_canister_id_from_uri(
     canister_id_resolver: impl ResolveCanisterId,
     logger: &slog::Logger,
 ) -> Option<(Principal, String)> {
-    //    let (_, canister_id) = url::form_urlencoded::parse(url.query()?.as_bytes())
-    //        .find(|(name, _)| name == "canisterId")?;
-    //    Principal::from_text(canister_id.as_ref()).ok()
-
     let mut segment = path_segments(url)?;
     if let Some("-") = segment.next() {
         let x = segment.next()?;
