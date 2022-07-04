@@ -1,0 +1,14 @@
+variable "redis_cluster" {}
+variable "redis_sg_name" {}
+variable "app_name_prefix" {}
+variable "node_type" {}
+variable "num_cache_nodes" {}
+variable "redis_port" {}
+variable "maintenance_window" {}
+variable "parameter_group_name" {}
+variable "engine_version" {}
+variable "environment" {}
+variable "db_username_ssm_parameter_name" {}
+variable "db_password_ssm_parameter_name" {}
+variable "vps_name" {}
+variable "tags" {}
