@@ -6,4 +6,6 @@ variable "alb_tg_name" {}
 variable "security_group_ids" {}
 variable "public_subnet_ids" {}
 variable "vpc_id" {}
+variable "waf_enable" {}
+variable "waf_web_acl_name" {}
 variable "tags" {}

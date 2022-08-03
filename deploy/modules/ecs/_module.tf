@@ -1,6 +1,7 @@
 resource "aws_cloudwatch_log_group" "main" {
   name              = "/ecs/${var.ecs_task_definition_name}"
   retention_in_days = 90
+  kms_key_id        = data.aws_kms_key.key.arn
   tags              = merge({ Name = var.ecs_task_definition_name, Environment = var.environment }, var.tags)
 }
 

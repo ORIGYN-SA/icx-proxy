@@ -7,6 +7,10 @@ resource "aws_elasticache_subnet_group" "redis" {
 }
 
 resource "aws_elasticache_replication_group" "redis_replication_group" {
+  #bridgecrew:skip=CKV_AWS_30: "Ensure all data stored in the Elasticache Replication Group is securely encrypted at transit"
+  #bridgecrew:skip=CKV_AWS_191: "Ensure Elasticache replication group is encrypted by KMS using a customer managed Key (CMK)"
+  #bridgecrew:skip=CKV_AWS_29: "Ensure all data stored in the Elasticache Replication Group is securely encrypted at rest"
+  #bridgecrew:skip=CKV_AWS_31: "Ensure all data stored in the Elasticache Replication Group is securely encrypted at transit and has auth token"
   replication_group_id       = var.redis_cluster
   automatic_failover_enabled = true
   engine                     = "redis"
@@ -16,6 +20,10 @@ resource "aws_elasticache_replication_group" "redis_replication_group" {
   num_cache_clusters         = var.num_cache_nodes
   port                       = var.redis_port
   maintenance_window         = var.maintenance_window
+  transit_encryption_enabled = var.transit_encryption_enabled
+  auth_token                 = var.auth_token
+  at_rest_encryption_enabled = var.at_rest_encryption_enabled
+  kms_key_id                 = var.kms_key_enable ? data.aws_kms_key.key[0].id : null
   subnet_group_name          = aws_elasticache_subnet_group.redis.name
   security_group_ids         = [data.aws_security_group.redis.id]
   description                = "Replication group for ${var.redis_cluster}"

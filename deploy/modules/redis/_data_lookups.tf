@@ -1,5 +1,10 @@
 data "aws_region" "current" {}
 
+data "aws_kms_key" "key" {
+  count  = var.kms_key_enable ? 1 : 0
+  key_id = "alias/${var.kms_name}"
+}
+
 data "aws_vpc" "selected_vpc" {
   filter {
     name   = "tag:Name"

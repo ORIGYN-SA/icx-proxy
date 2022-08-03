@@ -1,0 +1,23 @@
+name: Rosetta-API - Checkov SAST scan
+
+on:
+  push:
+    branches:
+      - dev
+      - stage
+      - main
+
+jobs:
+  checkov_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@master
+
+      - name: Test with Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          compact: true
+          quiet: true
+          framework: terraform
+          directory: deploy/

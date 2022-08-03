@@ -14,6 +14,7 @@ locals {
   redis_sg_name                  = "${local.name_prefix}-redis-sg-${local.environment_short_name}"
   redis_cluster                  = "${local.name_prefix}-redis-cluster-${local.environment_short_name}"
   kms_name                       = "${local.name_prefix}-kms-${local.environment_short_name}"
+  cdn_name                       = "${local.name_prefix}-cdn-${var.environment}"
   db_username_ssm_parameter_name = "${local.name_prefix}-db-username-${local.environment_short_name}"
   db_password_ssm_parameter_name = "${local.name_prefix}-db-password-${local.environment_short_name}"
   common_tags = {

@@ -11,4 +11,9 @@ variable "environment" {}
 variable "db_username_ssm_parameter_name" {}
 variable "db_password_ssm_parameter_name" {}
 variable "vps_name" {}
+variable "kms_name" {}
+variable "kms_key_enable" {}
+variable "auth_token" {}
+variable "transit_encryption_enabled" {}
+variable "at_rest_encryption_enabled" {}
 variable "tags" {}

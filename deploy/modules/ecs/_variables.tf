@@ -36,4 +36,6 @@ variable "db_username_ssm_parameter_name" {}
 variable "db_password_ssm_parameter_name" {}
 variable "kms_name" {}
 variable "app_name_prefix" {}
-variable "enable_containerInsights" {}
+variable "enable_containerInsights" {
+  default = "enabled"
+}

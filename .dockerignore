@@ -73,6 +73,7 @@ fabric.properties
 .idea/
 deploy/
 dev.Dockerfile
+qa.Dockerfile
 .dockerignore
 .gitignore
 README.md

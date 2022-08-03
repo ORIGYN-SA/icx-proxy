@@ -1,9 +1,12 @@
 resource "aws_ecr_repository" "main" {
   name                 = var.ecr_name
-  image_tag_mutability = "MUTABLE"
-
+  image_tag_mutability = "IMMUTABLE"
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = data.aws_kms_key.key.arn
+  }
   image_scanning_configuration {
-    scan_on_push = false
+    scan_on_push = true
   }
   tags = merge({ Name = var.ecr_name }, var.tags)
 }

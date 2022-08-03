@@ -49,6 +49,10 @@ variable "viewer_protocol_policy" {
   default = "redirect-to-https"
 }
 variable "minimum_protocol_version" {
-  default = "TLSv1"
+  default = "TLSv1.2_2018"
 }
+variable "cdn_name" {}
+variable "cloudfront_cache_policy" {}
+variable "waf_enable" {}
+variable "waf_web_acl_name" {}
 variable "tags" {}

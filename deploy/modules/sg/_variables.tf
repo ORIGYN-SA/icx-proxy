@@ -11,6 +11,7 @@ variable "lb_sg_rules" {
     from_port   = number
     to_port     = number
     cidr_blocks = list(string)
+    description = string
   }))
 }
 variable "ecs_sg_rules" {
@@ -20,6 +21,7 @@ variable "ecs_sg_rules" {
     from_port   = number
     to_port     = number
     cidr_blocks = list(string)
+    description = string
   }))
 }
 variable "redis_sg_rules" {
@@ -29,6 +31,7 @@ variable "redis_sg_rules" {
     from_port   = number
     to_port     = number
     cidr_blocks = list(string)
+    description = string
   }))
 }
 variable "tags" {
