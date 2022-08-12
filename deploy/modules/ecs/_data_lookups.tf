@@ -5,6 +5,9 @@ data "aws_kms_key" "key" {
 data "aws_ecr_repository" "service" {
   name = var.ecr_name
 }
+data "aws_ecr_repository" "varnish" {
+  name = "varnish-icx-proxy"
+}
 data "aws_ssm_parameter" "db_username" {
   name = var.db_username_ssm_parameter_name
 }

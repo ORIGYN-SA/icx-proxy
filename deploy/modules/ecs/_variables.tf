@@ -5,8 +5,12 @@ variable "security_group_ids" {}
 variable "private_subnet_ids" {}
 variable "ecr_name" {}
 variable "container_port" {}
-variable "container_cpu" {}
-variable "container_memory" {}
+variable "task_definition_cpu" {}
+variable "task_definition_memory" {}
+variable "icx_container_cpu" {}
+variable "icx_container_memory" {}
+variable "varnish_container_cpu" {}
+variable "varnish_container_memory" {}
 variable "service_desired_count" {}
 variable "alb_tg_group_arn" {}
 variable "environment" {}

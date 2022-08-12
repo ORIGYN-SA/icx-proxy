@@ -9,22 +9,24 @@ resource "aws_ecs_task_definition" "main" {
   family                   = var.ecs_task_definition_name
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = var.container_cpu
-  memory                   = var.container_memory
+  cpu                      = var.task_definition_cpu != null ? var.task_definition_cpu : var.icx_container_cpu + var.varnish_container_cpu
+  memory                   = var.task_definition_memory != null ? var.task_definition_memory : var.icx_container_memory + var.varnish_container_memory
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
   container_definitions = jsonencode([{
     name      = "${var.app_name_prefix}-container-${var.environment}"
     image     = "${data.aws_ecr_repository.service.repository_url}:latest"
     essential = true
+    cpu       = var.icx_container_cpu
+    memory    = var.icx_container_memory
     environment = [
       { name = "LOG_LEVEL",
       value = "DEBUG" }
     ]
     portMappings = [{
       protocol      = "tcp"
-      containerPort = var.container_port
-      hostPort      = var.container_port
+      containerPort = 3000
+      hostPort      = 3000
     }]
     logConfiguration = {
       logDriver = "awslogs"
@@ -34,6 +36,30 @@ resource "aws_ecs_task_definition" "main" {
         awslogs-region        = data.aws_region.current.name
       }
     }
+    },
+    {
+      name      = "varnish-icx-proxy-container-${var.environment}"
+      image     = "${data.aws_ecr_repository.varnish.repository_url}:latest"
+      essential = true
+      cpu       = var.varnish_container_cpu
+      memory    = var.varnish_container_memory
+      environment = [
+        { name = "LOG_LEVEL",
+        value = "DEBUG" }
+      ]
+      portMappings = [{
+        protocol      = "tcp"
+        containerPort = var.container_port
+        hostPort      = var.container_port
+      }]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.main.name
+          awslogs-stream-prefix = "ecs"
+          awslogs-region        = data.aws_region.current.name
+        }
+      }
   }])
 
   tags = merge({ Name = var.ecs_task_definition_name }, var.tags)
@@ -68,7 +94,7 @@ resource "aws_ecs_service" "main" {
 
   load_balancer {
     target_group_arn = var.alb_tg_group_arn
-    container_name   = "${var.app_name_prefix}-container-${var.environment}"
+    container_name   = "varnish-icx-proxy-container-${var.environment}"
     container_port   = var.container_port
   }
   lifecycle {

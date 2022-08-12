@@ -10,8 +10,12 @@ module "ecs" {
   security_group_ids             = data.aws_security_group.ecs.id
   alb_tg_group_arn               = data.aws_lb_target_group.alb_tg_group.arn
   service_desired_count          = var.service_desired_count
-  container_cpu                  = var.container_cpu
-  container_memory               = var.container_memory
+  task_definition_cpu            = var.task_definition_cpu
+  task_definition_memory         = var.task_definition_memory
+  icx_container_cpu              = var.icx_container_cpu
+  icx_container_memory           = var.icx_container_memory
+  varnish_container_cpu          = var.varnish_container_cpu
+  varnish_container_memory       = var.varnish_container_memory
   container_port                 = var.container_port
   environment                    = var.environment
   db_password_ssm_parameter_name = local.db_password_ssm_parameter_name
