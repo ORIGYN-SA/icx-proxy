@@ -128,15 +128,18 @@ pub async fn resolve_canister_id_from_uri(
         };
 
         if let Some(collection) = segment.next() {
-            let mut y = segment.clone().map(|s| format!("/{}", s)).collect::<String>();
-            // detect if collection present in link 
+            let mut y = segment
+                .clone()
+                .map(|s| format!("/{}", s))
+                .collect::<String>();
+            // detect if collection present in link
             if collection.len() != 0 && String::from(collection.clone()).ne(&String::from("-")) {
-                y = format!("/{}{}", collection, segment.map(|s| format!("/{}", s)).collect::<String>());
-                slog::info!(
-                    logger,
-                    "SEGMENTS NEXT AFTER CANISTER ID: {:?}",
-                    y.clone(),
+                y = format!(
+                    "/{}{}",
+                    collection,
+                    segment.map(|s| format!("/{}", s)).collect::<String>()
                 );
+                slog::info!(logger, "SEGMENTS NEXT AFTER CANISTER ID: {:?}", y.clone(),);
                 //add query string.
                 let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
                 slog::info!(
@@ -150,11 +153,7 @@ pub async fn resolve_canister_id_from_uri(
             if y.len() != 0 {
                 //add query string.
                 let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
-                slog::info!(
-                    logger,
-                    "REGULAR URI WITH QUERY STRING: {:?}",
-                    uri.clone(),
-                );
+                slog::info!(logger, "REGULAR URI WITH QUERY STRING: {:?}", uri.clone(),);
                 return Some((id, format!("/-{}", uri)));
             }
         }
@@ -252,7 +251,9 @@ impl ResolveCanisterId for RealAccess {
                     (canister_list.len() > 0)
                         .then(|| redis_param.as_ref())
                         .and_then(|param| param)
-                        .map(|RedisParam { redis_cache_tx, .. }| {
+                        .map_or_else(||{
+                            Some(canister_list[0])
+                        },|RedisParam { redis_cache_tx, .. }| {
                             redis_cache_tx
                                 .try_send((name.to_string(), canister_list[0].to_string()))
                                 .map_err(|err| {
@@ -263,9 +264,11 @@ impl ResolveCanisterId for RealAccess {
                                     );
                                 })
                                 .ok();
-                            canister_list[0]
+                            Some(canister_list[0])
                         })
                 });
+
+                slog::info!(logger, "found_principal: {:?}", found_principal);
                 return found_principal;
             }
         }
@@ -293,6 +296,39 @@ mod test {
         ) -> Option<Principal> {
             (&self.0 == name).then(|| Principal::from_text(&self.1).unwrap())
         }
+    }
+
+    #[tokio::test]
+    async fn test_real_access() {
+        let decorator = slog_term::TermDecorator::new().build();
+        let drain = slog_term::FullFormat::new(decorator).build().fuse();
+        let drain = slog_async::Async::new(drain).build().fuse();
+
+        let logger = slog::Logger::root(drain, slog::o!());
+
+        let canister_resolver = RealAccess;
+
+        let uri = "/-/bayc/collection/-/com.bayc.ape.mystery-ape.gif"
+            .parse::<Uri>()
+            .unwrap();
+        let res = resolve_canister_id_from_uri(
+            &uri,
+            None,
+            Some(&PhoneBookCanisterParam {
+                agent: ic_agent::agent::Agent::builder()
+                    .with_transport(
+                        ReqwestHttpReplicaV2Transport::create("http://localhost:8000").unwrap(),
+                    )
+                    .build()
+                    .unwrap(),
+                canister_id: Principal::from_text("t6rzw-2iaaa-aaaaa-aaama-cai").unwrap(),
+            }),
+            canister_resolver,
+            &logger,
+        )
+        .await;
+        println!("res: {:?}", res);
+        assert!(res.is_some());
     }
 
     #[tokio::test]
@@ -383,7 +419,7 @@ mod test {
         let res =
             resolve_canister_id_from_uri(&uri, None, None, canister_resolver.clone(), &logger)
                 .await;
-        assert!(res.is_none());
+        assert!(res.is_some());
         //uefa_nfts3g can't be converted to a canister_id
         let uri = "/-/uefa_nfts3g/-/uefa_nfts4g_0".parse::<Uri>().unwrap();
         let res =
