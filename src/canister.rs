@@ -303,14 +303,14 @@ mod test {
         let decorator = slog_term::TermDecorator::new().build();
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
-
         let logger = slog::Logger::root(drain, slog::o!());
-
         let canister_resolver = RealAccess;
 
-        let uri = "/-/bayc/collection/-/com.bayc.ape.mystery-ape.gif"
-            .parse::<Uri>()
-            .unwrap();
+        let test_asset_uri_env = option_env!("TEST_ASSET_URI").unwrap();
+        let test_phonebook_canister_id = option_env!("TEST_PHONEBOOK_CANISTER_ID").unwrap();
+
+        let uri = Uri::from_static(test_asset_uri_env);
+      
         let res = resolve_canister_id_from_uri(
             &uri,
             None,
@@ -321,7 +321,7 @@ mod test {
                     )
                     .build()
                     .unwrap(),
-                canister_id: Principal::from_text("t6rzw-2iaaa-aaaaa-aaama-cai").unwrap(),
+                canister_id: Principal::from_text(test_phonebook_canister_id).unwrap(),
             }),
             canister_resolver,
             &logger,
