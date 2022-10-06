@@ -1,0 +1,46 @@
+name: ICX-PROXY - CI
+
+on: [opened, closed, push, pull_request]
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image_id: ${{steps.image_push.outputs.image_id}}
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v3
+    
+    - name: Checkout NFT Repo
+      uses: actions/checkout@v3
+      with:
+        repository: ORIGYN-SA/origyn_nft
+        token: ${{ secrets.GH_PAT }}
+        path: origyn_nft
+    
+    - name: Checkout Phonebook Repo
+      uses: actions/checkout@v3
+      with:
+        repository: ORIGYN-SA/phone_book
+        token: ${{ secrets.GH_PAT }}
+        path: phone_book
+    
+    - name: Build Docker Image
+      run: |
+        docker build
+    
+    - name: Push Docker Image to Container Registry
+      id: image_push
+      run: |
+        echo "::set-output image_id=https://ghcr.io"
+
+  deploy-docker:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Launch Docker
+
+
