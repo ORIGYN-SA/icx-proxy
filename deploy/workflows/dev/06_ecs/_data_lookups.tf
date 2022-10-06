@@ -17,8 +17,12 @@ data "aws_subnets" "private_subnets" {
   }
 }
 
-data "aws_lb_target_group" "alb_tg_group" {
-  name = local.alb_tg_name
+#data "aws_lb_target_group" "alb_tg_group" {
+#  name = local.alb_tg_name
+#}
+
+data "aws_lb_target_group" "nlb_tg_group" {
+  name = local.nlb_tg_name
 }
 
 data "aws_security_group" "ecs" {

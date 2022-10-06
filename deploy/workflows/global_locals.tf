@@ -7,6 +7,8 @@ locals {
   alb_name                       = "${local.name_prefix}-alb-${var.environment}"
   alb_sg_name                    = "${local.name_prefix}-alb-sg-${local.environment_short_name}"
   alb_tg_name                    = "${local.name_prefix}-alb-tg-${var.environment}"
+  nlb_name                       = "${local.name_prefix}-nlb-${var.environment}"
+  nlb_tg_name                    = "${local.name_prefix}-nlb-tg-${var.environment}"
   ecr_name                       = "${local.name_prefix}-${var.environment}"
   ecs_task_definition_name       = "${local.name_prefix}-task-${var.environment}"
   ecs_sg_name                    = "${local.name_prefix}-ecs-task-sg-${local.environment_short_name}"

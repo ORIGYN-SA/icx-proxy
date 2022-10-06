@@ -1,7 +1,7 @@
 module "cdn" {
   source = "../../../modules/cdn-alb"
 
-  alb_name                       = local.alb_name
+  lb_name                        = local.nlb_name
   cdn_name                       = local.cdn_name
   acm_certificate_arn            = var.acm_certificate_arn
   cloudfront_default_certificate = var.cloudfront_default_certificate

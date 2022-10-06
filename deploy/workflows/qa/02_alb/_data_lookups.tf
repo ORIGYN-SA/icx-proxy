@@ -16,12 +16,12 @@ data "aws_subnets" "public_subnets" {
     Name = "*public"
   }
 }
-data "aws_security_group" "alb" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.selected_vpc.id]
-  }
-  tags = {
-    Name = local.alb_sg_name
-  }
-}
+#data "aws_security_group" "alb" {
+#  filter {
+#    name   = "vpc-id"
+#    values = [data.aws_vpc.selected_vpc.id]
+#  }
+#  tags = {
+#    Name = local.alb_sg_name
+#  }
+#}

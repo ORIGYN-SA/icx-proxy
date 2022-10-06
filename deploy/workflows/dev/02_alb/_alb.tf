@@ -12,3 +12,18 @@ module "alb" {
   waf_web_acl_name    = var.waf_web_acl_name
   tags                = local.common_tags
 }
+
+#module "nlb" {
+#  source              = "../../../modules/nlb"
+#  nlb_name            = local.nlb_name
+#  nlb_tg_name         = local.nlb_tg_name
+#  health_check_path   = var.health_check_path
+#  container_port      = var.container_port
+#  load_balancer_type  = "network"
+#  public_subnet_ids   = data.aws_subnets.public_subnets.ids
+#  vpc_id              = data.aws_vpc.selected_vpc.id
+#  tsl_certificate_arn = var.tsl_certificate_arn
+#  waf_enable          = var.waf_enable
+#  waf_web_acl_name    = var.waf_web_acl_name
+#  tags                = local.common_tags
+#}
