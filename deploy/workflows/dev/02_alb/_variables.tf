@@ -11,3 +11,4 @@ variable "waf_enable" {
 variable "waf_web_acl_name" {
   default = ""
 }
+variable "container_port" {}

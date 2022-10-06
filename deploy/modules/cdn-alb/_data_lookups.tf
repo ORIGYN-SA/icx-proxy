@@ -1,6 +1,6 @@
 data "aws_region" "current" {}
-data "aws_lb" "alb" {
-  name = var.alb_name
+data "aws_lb" "lb" {
+  name = var.lb_name
 }
 data "aws_cloudfront_cache_policy" "cloudfront_cache_policy" {
   name = "Managed-${var.cloudfront_cache_policy}"

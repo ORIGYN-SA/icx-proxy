@@ -1,4 +1,4 @@
-variable "alb_name" {}
+variable "lb_name" {}
 variable "is_ipv6_enabled" {
   default = false
 }

@@ -5,8 +5,8 @@ resource "aws_cloudfront_distribution" "this" {
   comment         = var.comment
   aliases         = var.domain_name
   origin {
-    domain_name = data.aws_lb.alb.dns_name
-    origin_id   = data.aws_lb.alb.id
+    domain_name = data.aws_lb.lb.dns_name
+    origin_id   = data.aws_lb.lb.id
 
     custom_origin_config {
       http_port              = var.http_port
@@ -27,7 +27,7 @@ resource "aws_cloudfront_distribution" "this" {
 
     allowed_methods          = var.allowed_methods
     cached_methods           = var.cached_methods
-    target_origin_id         = data.aws_lb.alb.id
+    target_origin_id         = data.aws_lb.lb.id
     cache_policy_id          = data.aws_cloudfront_cache_policy.cloudfront_cache_policy.id
     viewer_protocol_policy   = var.viewer_protocol_policy
     origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer.id
@@ -58,8 +58,9 @@ resource "aws_s3_bucket" "access_logs" {
   #checkov:skip=CKV_AWS_18: "Ensure the S3 bucket has access logging enabled" Logging not needed on a logging bucket.
   #checkov:skip=CKV_AWS_144: "Ensure that S3 bucket has cross-region replication enabled" Not required to have cross region enabled.
   #checkov:skip=CKV_AWS_145: "Ensure that S3 buckets are encrypted with KMS by default" Amazon S3-Managed Encryption Keys (SSE-S3) is required for CloudFront
-  bucket = "${var.cdn_name}-logs-${data.aws_region.current.name}"
-  tags   = merge({ Name = "${var.cdn_name}-logs-${data.aws_region.current.name}" }, var.tags)
+  bucket        = "${var.cdn_name}-logs-${data.aws_region.current.name}"
+  force_destroy = true
+  tags          = merge({ Name = "${var.cdn_name}-logs-${data.aws_region.current.name}" }, var.tags)
 
 }
 
@@ -93,4 +94,27 @@ resource "aws_s3_bucket_public_access_block" "public_access_block" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
-
+resource "aws_s3_bucket_lifecycle_configuration" "cdn_log" {
+  bucket = aws_s3_bucket.access_logs.id
+  rule {
+    id = "Store logs for the last 7 days"
+    expiration {
+      days = 7
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+    status = "Enabled"
+  }
+  rule {
+    id = "Expired object delete_marker"
+    expiration {
+      days                         = 0
+      expired_object_delete_marker = true
+    }
+    status = "Enabled"
+  }
+}
