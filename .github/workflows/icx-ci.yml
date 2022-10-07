@@ -25,10 +25,11 @@ jobs:
         token: ${{ secrets.GH_PAT }}
         path: phone_book
     
-    - name: Build Docker Image
-      run: |
-        docker build
-    
+   - name: Docker Compose Action
+     uses: isbang/compose-action@v1.3.2
+     with:
+        compose-file: "./icx-proxy/.ci/docker-compose.yml"
+      
     - name: Push Docker Image to Container Registry
       id: image_push
       run: |
