@@ -1,6 +1,6 @@
 name: ICX-PROXY - CI
 
-on: [opened, closed, push, pull_request]
+on: [ push, pull_request]
 
 jobs:
   build-image:
