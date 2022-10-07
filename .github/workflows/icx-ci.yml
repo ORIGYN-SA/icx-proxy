@@ -1,6 +1,11 @@
-name: ICX-PROXY - CI
-
-on: [ push, pull_request]
+name: 'ICX-PROXY - CI'
+on: 
+  push:
+    branches:
+      - "*"
+  pull_request:
+    branches:
+      - "*"
 
 jobs:
   build-image:
@@ -24,10 +29,10 @@ jobs:
         repository: ORIGYN-SA/phone_book
         token: ${{ secrets.GH_PAT }}
         path: phone_book
-    
-   - name: Docker Compose Action
-     uses: isbang/compose-action@v1.3.2
-     with:
+
+    - name: Docker Compose Action
+      uses: isbang/compose-action@v1.3.2
+      with:
         compose-file: "./icx-proxy/.ci/docker-compose.yml"
       
     - name: Push Docker Image to Container Registry
