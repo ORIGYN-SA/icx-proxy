@@ -7,9 +7,13 @@ services:
       - "3000:3000"
     depends_on:
       - redis
+      - canisters
   redis:
     image: redis
   canisters:
     build:
       context: ..
       dockerfile: .ci/canisters.Dockerfile
+      
+      ports:
+        - "8000:8000"
