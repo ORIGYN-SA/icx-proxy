@@ -20,14 +20,14 @@ jobs:
       uses: actions/checkout@v3
       with:
         repository: ORIGYN-SA/origyn_nft
-        token: ${{ secrets.GH_PAT }}
+        token: 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
         path: origyn_nft
     
     - name: Checkout Phonebook Repo
       uses: actions/checkout@v3
       with:
         repository: ORIGYN-SA/phone_book
-        token: ${{ secrets.GH_PAT }}
+        token: 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
         path: phone_book
 
     - name: Docker Compose Action
