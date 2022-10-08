@@ -34,11 +34,13 @@ jobs:
       uses: isbang/compose-action@v1.3.2
       with:
         compose-file: "./icx-proxy/.ci/docker-compose.yml"
+
+    - name: 
       
-    - name: Push Docker Image to Container Registry
-      id: image_push
-      run: |
-        echo "::set-output image_id=https://ghcr.io"
+    # - name: Push Docker Image to Container Registry
+    #   id: image_push
+    #   run: |
+    #     echo "::set-output image_id=https://ghcr.io"
 
   deploy-docker:
     needs: build-image
