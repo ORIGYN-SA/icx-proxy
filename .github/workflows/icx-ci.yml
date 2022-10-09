@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest 
     outputs:
       image_id: ${{steps.image_push.outputs.image_id}}
     steps:
@@ -30,17 +30,17 @@ jobs:
         token: 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
         path: phone_book
 
-    - name: Docker Compose Action
+    - name: NFT, Phonebook, Redis and Icx Proxy Service
       uses: isbang/compose-action@v1.3.2
       with:
-        compose-file: "./icx-proxy/.ci/docker-compose.yml"
+        compose-file: "icx-proxy/.ci/docker-compose.yml"
 
-    - name: 
-      
-    # - name: Push Docker Image to Container Registry
-    #   id: image_push
-    #   run: |
-    #     echo "::set-output image_id=https://ghcr.io"
+    - name: Deploy NFTs
+      uses: actions/setup-node@v3
+      with:
+        node-version: 16
+      run: ./icx-proxy/.ci/deploy_mock_nfts.sh
+
 
   deploy-docker:
     needs: build-image

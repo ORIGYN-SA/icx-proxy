@@ -1,18 +1,19 @@
 services:
-  icx-proxy:
-    build:
-      context: ..
-      dockerfile: .ci/Dockerfile
-    ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-      - canisters
-  redis:
-    image: redis
-  canisters:
+  proxy_and_canisters:
     build:
       context: ..
       dockerfile: .ci/canisters.Dockerfile
     ports:
+      - "3000:3000"
       - "8000:8000"
+    depends_on:
+      - redis
+      # - canisters
+  redis:
+    image: redis
+  # canisters:
+  #   build:
+  #     context: ..
+  #     dockerfile: .ci/canisters.Dockerfile
+    ports:
+      - "6379:6379"

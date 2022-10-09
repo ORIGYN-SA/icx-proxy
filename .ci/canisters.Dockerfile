@@ -1,3 +1,9 @@
+FROM rust:1.58.1 as rust_builder
+WORKDIR /icx_proxy
+COPY ./src ./src/
+COPY ./Cargo* ./
+RUN cargo build --release
+
 FROM --platform=linux/amd64 debian:bullseye-slim
 RUN apt-get update  
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -15,25 +21,25 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 RUN sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"
-RUN wget https://github.com/dfinity/vessel/releases/download/v0.6.4/vessel-linux64 --output-document=vessel && vessel
+WORKDIR /usr/local/bin/
+ADD https://github.com/dfinity/vessel/releases/download/v0.6.4/vessel-linux64 vessel
+RUN chmod +x vessel
+COPY ./origyn_nft ./origyn_nft/
+COPY ./phone_book ./phone_book/
+COPY --from=rust_builder /icx_proxy/target/release/icx-proxy ./icx-proxy
+EXPOSE 3000 8000
 
-COPY ../origyn_nft ./origyn_nft/
-COPY ../phonebook ./phonebook/
-
-WORKDIR /origyn_nft
-RUN dfx start --background && \
+RUN cd origyn_nft && \
+    dfx start --background --emulator && \
     dfx canister create origyn_nft_reference && \
     dfx build origyn_nft_reference && \
-    cp .dfx/local/canisters/origyn_nft_reference ../builds/origyn_nft && \
-    rm ../origyn_nft
+    cd ../phone_book && \
+    dfx canister create phone_book && \
+    dfx build phone_book
 
-
-
-WORKDIR /phonebook
-RUN dfx start --background && \
-    dfx canister create phonebook && \
-    dfx build phonebook && \
-    cp .dfx/local/canisters/phonebook ../builds/phonebook && \
-    rm ../phonebook
-
-CMD dfx start 
+CMD ADMIN_PRINCIPAL=$(dfx identity get-principal) cd origyn_nft && \
+    dfx start --background --emulator && \
+    dfx deploy origyn_nft_reference --argument "(record {owner = principal \"$ADMIN_PRINCIPAL\"; storage_space = null})" && \
+    cd ../phone_book && \
+    dfx deploy phone_book --argument "(principal \"$ADMIN_PRINCIPAL\")" && \
+    icx-proxy --debug -v --log "stderr" --replica "http://localhost:8000" --address 0.0.0.0:3000 --redis-url "redis://localhost:6379" --phonebook-id "$(dfx canister id phonebook)"
