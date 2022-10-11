@@ -3,6 +3,7 @@ WORKDIR /icx_proxy
 COPY ./src ./src/
 COPY ./Cargo* ./
 RUN cargo build --release
+CMD ./target/release/icx-proxy --debug -v --log "stderr" --replica "http://localhost:8000" --address 0.0.0.0:3000 --redis-url "redis://localhost:6379" --phonebook-id "$(dfx canister id phonebook)"
 
 FROM --platform=linux/amd64 debian:bullseye-slim
 RUN apt-get update  
@@ -22,8 +23,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 
 RUN sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"
 WORKDIR /usr/local/bin/
-COPY --from=rust_builder /icx_proxy/target/release/icx-proxy ./icx-proxy
-
+COPY --from=rust_builder ./icx_proxy/target/release/icx-proxy ./icx-proxy
+RUN chmod +x ./icx-proxy
 ADD https://github.com/dfinity/vessel/releases/download/v0.6.4/vessel-linux64 vessel
 RUN chmod +x vessel
 
@@ -40,7 +41,8 @@ EXPOSE 3000 8000
 
 RUN ./deploy_nft_canister.sh
 RUN  ./deploy_phonebook_canister.sh
-
+# CMD sleep 8888
+# CMD icx-proxy --debug -v --log "stderr" --replica "http://localhost:8000" --address 0.0.0.0:3000 --redis-url "redis://localhost:6379" --phonebook-id "$(dfx canister id phonebook)"
 CMD cd origyn_nft &&\
 dfx start --background --emulator &&\
 cd .. &&\

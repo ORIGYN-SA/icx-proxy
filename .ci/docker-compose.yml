@@ -11,9 +11,5 @@ services:
       # - canisters
   redis:
     image: redis
-  # canisters:
-  #   build:
-  #     context: ..
-  #     dockerfile: .ci/canisters.Dockerfile
     ports:
       - "6379:6379"
