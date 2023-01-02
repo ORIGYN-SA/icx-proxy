@@ -113,3 +113,12 @@ Once installed, using `icx-proxy --help` will show the usage message and all the
 
 ## Ecosystem
 This is similar in principle to `dfx bootstrap`, but is simpler and more configurable. This also can replace a Replica when using the `--network` flag in `dfx`.
+
+## Testing
+Two Environmental Variables are required to run the tests:
+
+```bash
+export TEST_ASSET_URI="<A url of a deployed collection asset e.g /-/bayc/collection/-/com.bayc.ape.mystery-ape.gif>"
+
+export TEST_PHONEBOOK_ID="<A locally deployed phonebook canister id e.g. ngrpb-5qaaa-aaaaj-adz7a-cai>"
+```
