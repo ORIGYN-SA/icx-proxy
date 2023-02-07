@@ -11,6 +11,7 @@ variable "icx_container_cpu" {
 variable "icx_container_memory" {
   default = null
 }
+variable "enable_varnish" {}
 variable "varnish_container_cpu" {
   default = null
 }

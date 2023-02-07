@@ -1,0 +1,59 @@
+image: alpine
+
+variables:
+  APP_NAME: tf-icx-proxy
+
+stages:
+  - build
+  - update
+
+.configure_aws:
+  before_script:
+    - apk add --no-cache jq python3 py3-pip && pip install awscli
+    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+    - aws configure set region $AWS_DEFAULT_REGION
+
+.env_rules:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        DYNAMIC_ENV: "dev"
+    - if: $CI_COMMIT_BRANCH == "dev"
+      variables:
+        DYNAMIC_ENV: "qa"
+
+.build_push: &build_push
+  - /kaniko/executor
+    --context $CI_PROJECT_DIR
+    --dockerfile $CI_PROJECT_DIR/$DYNAMIC_ENV.Dockerfile
+    --destination $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_NAME-$DYNAMIC_ENV:$CI_COMMIT_SHA
+
+.update_script: &update_script
+  - aws ecs describe-task-definition --task-definition $APP_NAME-task-$DYNAMIC_ENV --query taskDefinition > task-definition.json
+  - echo $(jq --arg image "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$APP_NAME-$DYNAMIC_ENV:$CI_COMMIT_SHA" '.containerDefinitions[0].image = $image | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)' task-definition.json) > task-definition.json
+  - aws ecs register-task-definition --cli-input-json file://$PWD/task-definition.json
+  - aws ecs update-service --region $AWS_DEFAULT_REGION --cluster $APP_NAME-cluster-$DYNAMIC_ENV --service $APP_NAME-ecs-service-$DYNAMIC_ENV-$AWS_DEFAULT_REGION --task-definition $APP_NAME-task-$DYNAMIC_ENV
+
+build-push:
+  extends: .env_rules
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [ "" ]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"credsStore\":\"ecr-login\"}" > /kaniko/.docker/config.json
+    - *build_push
+  tags:
+    - docker
+
+update-ecs:
+  extends:
+   - .env_rules
+   - .configure_aws
+  stage: update
+  script:
+    - *update_script
+  tags:
+    - docker
