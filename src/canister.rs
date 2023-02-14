@@ -111,11 +111,6 @@ pub async fn resolve_canister_id_from_uri(
     let mut segment = path_segments(url)?;
     if let Some("-") = segment.next() {
         let x = segment.next()?;
-        slog::info!(
-            logger,
-            "FIRST SEGMENT AS CANISTER IDENTYFIER: {:?}",
-            x.clone(),
-        );
         //detect if it's a canister id
         let id = match Principal::from_text(x) {
             Ok(id) => id,
@@ -132,29 +127,14 @@ pub async fn resolve_canister_id_from_uri(
             // detect if collection present in link 
             if collection.len() != 0 && String::from(collection.clone()).ne(&String::from("-")) {
                 y = format!("/{}{}", collection, segment.map(|s| format!("/{}", s)).collect::<String>());
-                slog::info!(
-                    logger,
-                    "SEGMENTS NEXT AFTER CANISTER ID: {:?}",
-                    y.clone(),
-                );
                 //add query string.
                 let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
-                slog::info!(
-                    logger,
-                    "COLLECTION URI WITH QUERY STRING: {:?}",
-                    uri.clone(),
-                );
                 return Some((id, uri));
             }
 
             if y.len() != 0 {
                 //add query string.
                 let uri = url.query().map(|q| format!("{}?{}", y, q)).unwrap_or(y);
-                slog::info!(
-                    logger,
-                    "REGULAR URI WITH QUERY STRING: {:?}",
-                    uri.clone(),
-                );
                 return Some((id, format!("/-{}", uri)));
             }
         }
@@ -252,7 +232,9 @@ impl ResolveCanisterId for RealAccess {
                     (canister_list.len() > 0)
                         .then(|| redis_param.as_ref())
                         .and_then(|param| param)
-                        .map(|RedisParam { redis_cache_tx, .. }| {
+                        .map_or_else(||{
+                            Some(canister_list[0])
+                        },|RedisParam { redis_cache_tx, .. }| {
                             redis_cache_tx
                                 .try_send((name.to_string(), canister_list[0].to_string()))
                                 .map_err(|err| {
@@ -263,7 +245,7 @@ impl ResolveCanisterId for RealAccess {
                                     );
                                 })
                                 .ok();
-                            canister_list[0]
+                            Some(canister_list[0])
                         })
                 });
                 return found_principal;

@@ -2,18 +2,16 @@ use crate::canister::resolve_canister_id_from_uri;
 use crate::canister::PhoneBookCanisterParam;
 use crate::canister::{RealAccess, RedisParam};
 use clap::{crate_authors, crate_version, Parser};
-use flate2::read::{DeflateDecoder, GzDecoder};
 use hyper::{
     body,
     body::Bytes,
     service::{make_service_fn, service_fn},
-    Body, Request, Response, Server, StatusCode, Uri,
+    Body, Request, Response, Server, StatusCode,
 };
 use ic_agent::{
     agent::http_transport::ReqwestHttpReplicaV2Transport,
     export::Principal,
-    ic_types::{hash_tree::LookupResult, HashTree},
-    lookup_value, Agent, AgentError, Certificate,
+    Agent, AgentError,
 };
 use ic_utils::{
     call::AsyncCall,
@@ -23,20 +21,11 @@ use ic_utils::{
         StreamingCallbackHttpResponse, StreamingStrategy, Token,
     },
 };
-use candid::{
-    parser::{
-        value::{IDLValue},
-    },
-    types::{Label},
-};
-use lazy_regex::regex_captures;
 use redis::Commands;
-use sha2::{Digest, Sha256};
 use slog::Drain;
 use std::{
     convert::Infallible,
     error::Error,
-    io::Read,
     net::SocketAddr,
     path::PathBuf,
     sync::{
@@ -46,25 +35,23 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+use crate::ic_req_headers::HeadersData;
+use crate::ic_req_headers::DataExtractor;
+
 mod canister;
 //mod config;
 mod logging;
+mod ic_req_headers;
+mod req_validation;
 
+// The maximum length of a body we should log as tracing.
+const MAX_LOG_BODY_SIZE: usize = 100;
 type HttpResponseAny = HttpResponse<Token, HttpRequestStreamingCallbackAny>;
 
 // Limit the total number of calls to an HTTP Request loop to 1000 for now.
 const MAX_HTTP_REQUEST_STREAM_CALLBACK_CALL_COUNT: i32 = 1000;
 //set str because clap need str for default value.
 const DEFAULT_REDIS_EXPIRY_CACHE_TIMEOUT_IN_SECOND: &'static str = "86400"; //24h = 3600 * 24
-
-// The maximum length of a body we should log as tracing.
-const MAX_LOG_BODY_SIZE: usize = 100;
-const MAX_LOG_CERT_NAME_SIZE: usize = 100;
-const MAX_LOG_CERT_B64_SIZE: usize = 2000;
-
-// The limit of a buffer we should decompress ~10mb.
-const MAX_CHUNK_SIZE_TO_DECOMPRESS: usize = 1024;
-const MAX_CHUNKS_TO_DECOMPRESS: u64 = 10_240;
 
 #[derive(Parser)]
 #[clap(
@@ -127,100 +114,6 @@ pub(crate) struct Opts {
     redis_cache_timeout: usize,
 }
 
-fn decode_hash_tree(
-    name: &str,
-    value: Option<String>,
-    logger: &slog::Logger,
-) -> Result<Vec<u8>, ()> {
-    match value {
-        Some(tree) => base64::decode(tree).map_err(|e| {
-            slog::warn!(logger, "Unable to decode {} from base64: {}", name, e);
-        }),
-        _ => Err(()),
-    }
-}
-
-struct HeadersData {
-    certificate: Option<Result<Vec<u8>, ()>>,
-    tree: Option<Result<Vec<u8>, ()>>,
-    encoding: Option<String>,
-    key: Option<String>,
-}
-
-fn extract_headers_data(headers: &[HeaderField], logger: &slog::Logger) -> HeadersData {
-    let mut headers_data = HeadersData {
-        certificate: None,
-        tree: None,
-        encoding: None,
-        key: None,
-    };
-
-    for HeaderField(name, value) in headers {
-        if name.eq_ignore_ascii_case("IC-CERTIFICATE") {
-            for field in value.split(',') {
-                if let Some((_, name, b64_value)) = regex_captures!("^(.*)=:(.*):$", field.trim()) {
-                    slog::trace!(
-                        logger,
-                        ">> certificate {:.l1$}: {:.l2$}",
-                        name,
-                        b64_value,
-                        l1 = MAX_LOG_CERT_NAME_SIZE,
-                        l2 = MAX_LOG_CERT_B64_SIZE
-                    );
-                    let bytes = decode_hash_tree(name, Some(b64_value.to_string()), logger);
-                    if name == "certificate" {
-                        headers_data.certificate = Some(match (headers_data.certificate, bytes) {
-                            (None, bytes) => bytes,
-                            (Some(Ok(certificate)), Ok(bytes)) => {
-                                slog::warn!(logger, "duplicate certificate field: {:?}", bytes);
-                                Ok(certificate)
-                            }
-                            (Some(Ok(certificate)), Err(_)) => {
-                                slog::warn!(
-                                    logger,
-                                    "duplicate certificate field (failed to decode)"
-                                );
-                                Ok(certificate)
-                            }
-                            (Some(Err(_)), bytes) => {
-                                slog::warn!(
-                                    logger,
-                                    "duplicate certificate field (failed to decode)"
-                                );
-                                bytes
-                            }
-                        });
-                    } else if name == "tree" {
-                        headers_data.tree = Some(match (headers_data.tree, bytes) {
-                            (None, bytes) => bytes,
-                            (Some(Ok(tree)), Ok(bytes)) => {
-                                slog::warn!(logger, "duplicate tree field: {:?}", bytes);
-                                Ok(tree)
-                            }
-                            (Some(Ok(tree)), Err(_)) => {
-                                slog::warn!(logger, "duplicate tree field (failed to decode)");
-                                Ok(tree)
-                            }
-                            (Some(Err(_)), bytes) => {
-                                slog::warn!(logger, "duplicate tree field (failed to decode)");
-                                bytes
-                            }
-                        });
-                    }
-                }
-            }
-        } else if name.eq_ignore_ascii_case("CONTENT-ENCODING") {
-            let enc = value.trim().to_string();
-            headers_data.encoding = Some(enc);
-        } else if name.eq_ignore_ascii_case("TREE-KEY") {
-            let key = value.trim().to_string();
-            headers_data.key = Some(key);
-        }
-    }
-
-    headers_data
-}
-
 async fn forward_request(
     request: Request<Body>,
     agent: Arc<Agent>,
@@ -247,7 +140,7 @@ async fn forward_request(
 
     let (parts, body) = request.into_parts();
 
-    let method = parts.method;
+    let method = parts.method.clone();
     let headers = parts
         .headers
         .iter()
@@ -343,7 +236,7 @@ async fn forward_request(
         builder = builder.header(name.as_ref(), value.as_ref());
     }
 
-    let headers_data = extract_headers_data(&http_response.headers, &logger);
+    let headers_data: HeadersData = HeadersData::extract(&http_response.headers, &logger);
     let body = if logger.is_trace_enabled() {
         Some(http_response.body.clone())
     } else {
@@ -351,6 +244,13 @@ async fn forward_request(
     };
 
     let is_streaming = http_response.streaming_strategy.is_some();
+    if is_streaming.clone() {
+        slog::info!(
+            logger,
+            "==[ STREAMING ]==> CONTENT DETECTED: {:?}",
+            is_streaming.clone(),
+        );
+    }
     let response = if let Some(streaming_strategy) = http_response.streaming_strategy {
         let (mut sender, body) = body::Body::channel();
         let agent = agent.as_ref().clone();
@@ -358,7 +258,7 @@ async fn forward_request(
 
         if !skip_validation {
             //verification first chunk
-            let body_valid = validate(
+            let body_valid = req_validation::validate(
                 &headers_data,
                 &canister_id,
                 &agent,
@@ -374,13 +274,33 @@ async fn forward_request(
             }
         }
 
+        slog::info!(
+            logger,
+            "==[ STREAMING ]==> FIRST CHUNK: {:?}",
+            http_response.headers.clone(),
+        );
+
         match streaming_strategy {
             StreamingStrategy::Callback(callback) => {
+                // let { principal, method } = callback.callback.0;
+                slog::info!(
+                    logger,
+                    "==[ STREAMING ]==> StreamingStrategy::CALLBACK: {:?}",
+                    callback.clone(),
+                );
+        
                 let streaming_canister_id = callback.callback.0.principal;
                 let method_name = callback.callback.0.method;
                 let mut callback_token = callback.token;
                 let logger = logger.clone();
                 let uri = parts.uri.clone();
+
+                slog::info!(
+                    logger,
+                    "==[ STREAMING ]==> PROCESSING CHUNK WITH CALLBACK_TOKEN: {:?}",
+                    callback_token.clone(),
+                );
+
                 tokio::spawn(async move {
                     let canister = HttpRequestCanister::create(&agent, streaming_canister_id);
                     // We have not yet called http_request_stream_callback.
@@ -398,41 +318,29 @@ async fn forward_request(
                             .await
                         {
                             Ok((StreamingCallbackHttpResponse { body, token },)) => {
+                                slog::info!(
+                                    logger,
+                                    "==[ STREAMING_SPAWN ]==> REQUESTED CHUNK: {:?}",
+                                    body.len(),
+                                );
+                                slog::info!(
+                                    logger,
+                                    "==[ STREAMING_SPAWN ]==> REQUESTED CHUNK TOKEN: {:?}",
+                                    token.clone(),
+                                );
+
                                 if !skip_validation  {
-                                    //verification next chunk
-                                    let fields  = match token.clone() {
-                                        Some(Token(IDLValue::Record(fields))) => fields,
-                                        _ => Vec::new(),
-                                    };
-                                   
-                                    let token_cert = fields.iter().find(|&r| r.id == Label::Id(1_102_915_300));
-                                    let token_tree = fields.iter().find(|&r| r.id == Label::Id(1_292_081_502));
-                                    let token_tree_path = fields.iter().find(|&r| r.id == Label::Id(3_577_787_238));
-    
-                                    if token_cert.is_some() && token_tree.is_some() && token_tree_path.is_some()  {
-                                        let cert_bytes = base64::decode(token_cert.unwrap().val.to_string().replace("\"", "")).unwrap();
-                                        let tree_bytes = base64::decode(token_tree.unwrap().val.to_string().replace("\"", "")).unwrap();
-                                        let tree_path = token_tree_path.unwrap().val.to_string().replace("\"", "");
-    
-                                        let body_valid = validate(
-                                            &HeadersData {
-                                                certificate: Some(Ok(cert_bytes)),
-                                                tree: Some(Ok(tree_bytes)),
-                                                encoding: None,
-                                                key: Some(tree_path),
-                                            },
-                                            &canister_id,
-                                            &agent,
-                                            &uri,
-                                            &Bytes::from(body.clone()),
-                                            logger.clone(),
-                                        );
-    
-                                        if body_valid.is_err() {
-                                            slog::debug!(logger, "Error body_valid is not valid");
-                                            sender.abort();
-                                            break;
-                                        }
+                                    let is_chunk_valid = req_validation::validate_chunk(
+                                        StreamingCallbackHttpResponse { body: body.clone(), token: token.clone() },
+                                        canister_id.clone(),
+                                        &agent,
+                                        &parts.uri,
+                                        logger.clone(),
+                                    );
+                                    if is_chunk_valid.is_err() {
+                                        slog::debug!(logger, "Error chunk_body_valid is not valid");
+                                        sender.abort();
+                                        break;
                                     }
                                 }
                                
@@ -460,7 +368,7 @@ async fn forward_request(
         builder.body(body)?
     } else {
         if !skip_validation {
-            let body_valid = validate(
+            let body_valid = req_validation::validate(
                 &headers_data,
                 &canister_id,
                 &agent,
@@ -509,7 +417,7 @@ async fn forward_request(
             }
         );
     }
-
+    slog::trace!(logger, "[[ INCOMING_REQUEST_RESPONSE ]] ==> STATUS:{} || HEADERS: {:?}", response.status().to_string(), response.headers());
     Ok(response)
 }
 
@@ -517,163 +425,6 @@ fn skip_validation(url: &hyper::Uri) -> bool {
     url.query()
         .map(|query| if query.contains("_raw") { true } else { false })
         .unwrap_or(false)
-}
-
-fn validate(
-    headers_data: &HeadersData,
-    canister_id: &Principal,
-    agent: &Agent,
-    uri: &Uri,
-    response_body: &[u8],
-    logger: slog::Logger,
-) -> Result<(), String> {
-    let body_sha = if let Some(body_sha) =
-        decode_body_to_sha256(response_body, headers_data.encoding.clone())
-    {
-        body_sha
-    } else {
-        return Err("Body could not be decoded".into());
-    };
-
-    let found_uri = str::replace(uri.path(), &format!("{}{}", "/-/", canister_id).to_string(), "");
-    let tree_key = if let Some(tree_key) = headers_data.key.as_ref() { tree_key } else { &found_uri };
-
-    let body_valid = match (
-        headers_data.certificate.as_ref(),
-        headers_data.tree.as_ref(),
-    ) {
-        (Some(Ok(certificate)), Some(Ok(tree))) => match validate_body(
-            Certificates { certificate, tree },
-            canister_id,
-            agent,
-            tree_key.to_string(),
-            &body_sha,
-            logger.clone(),
-        ) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err("Body does not pass verification".to_string()),
-            Err(e) => Err(format!("Certificate validation failed: {}", e)),
-        },
-        (Some(_), _) | (_, Some(_)) => Err("Body does not pass verification".to_string()),
-
-        // TODO: Remove this (FOLLOW-483)
-        // Canisters don't have to provide certified variables
-        // This should change in the future, grandfathering in current implementations
-        (None, None) => Ok(()),
-    };
-
-    if body_valid.is_err() && !cfg!(feature = "skip_body_verification") {
-        return body_valid;
-    }
-
-    Ok(())
-}
-
-fn decode_body_to_sha256(body: &[u8], encoding: Option<String>) -> Option<[u8; 32]> {
-    let mut sha256 = Sha256::new();
-    let mut decoded = [0u8; MAX_CHUNK_SIZE_TO_DECOMPRESS];
-    match encoding.as_deref() {
-        Some("gzip") => {
-            let mut decoder = GzDecoder::new(body);
-            for _ in 0..MAX_CHUNKS_TO_DECOMPRESS {
-                let bytes = decoder.read(&mut decoded).ok()?;
-                if bytes == 0 {
-                    return Some(sha256.finalize().into());
-                }
-                sha256.update(&decoded[0..bytes]);
-            }
-            if decoder.bytes().next().is_some() {
-                return None;
-            }
-        }
-        Some("deflate") => {
-            let mut decoder = DeflateDecoder::new(body);
-            for _ in 0..MAX_CHUNKS_TO_DECOMPRESS {
-                let bytes = decoder.read(&mut decoded).ok()?;
-                if bytes == 0 {
-                    return Some(sha256.finalize().into());
-                }
-                sha256.update(&decoded[0..bytes]);
-            }
-            if decoder.bytes().next().is_some() {
-                return None;
-            }
-        }
-        _ => sha256.update(body),
-    };
-    Some(sha256.finalize().into())
-}
-
-struct Certificates<'a> {
-    certificate: &'a Vec<u8>,
-    tree: &'a Vec<u8>,
-}
-
-fn validate_body(
-    certificates: Certificates,
-    canister_id: &Principal,
-    agent: &Agent,
-    tree_key: String,
-    body_sha: &[u8; 32],
-    logger: slog::Logger,
-) -> anyhow::Result<bool> {
-    let cert: Certificate =
-        serde_cbor::from_slice(certificates.certificate).map_err(AgentError::InvalidCborData)?;
-    let tree: HashTree =
-        serde_cbor::from_slice(certificates.tree).map_err(AgentError::InvalidCborData)?;
-
-    //TODO: does not pass verification
-    // if let Err(e) = agent.verify(&cert, *canister_id, false) {
-    //     slog::trace!(logger, ">> certificate failed verification: {}", e);
-    //     return Ok(false);
-    // }
-
-    let certified_data_path = vec![
-        "canister".into(),
-        canister_id.into(),
-        "certified_data".into(),
-    ];
-    let witness = match lookup_value(&cert, certified_data_path) {
-        Ok(witness) => witness,
-        Err(e) => {
-            slog::trace!(
-                logger,
-                ">> Could not find certified data for this canister in the certificate: {}",
-                e
-            );
-            return Ok(false);
-        }
-    };
-    let digest = tree.digest();
-
-    if witness != digest {
-        slog::trace!(
-            logger,
-            ">> witness ({}) did not match digest ({})",
-            hex::encode(witness),
-            hex::encode(digest)
-        );
-
-        return Ok(false);
-    }
-
-    let path = ["http_assets".into(), tree_key.into()];
-    let tree_sha = match tree.lookup_path(&path) {
-        LookupResult::Found(v) => v,
-        _ => match tree.lookup_path(&["http_assets".into(), "/index.html".into()]) {
-            LookupResult::Found(v) => v,
-            _ => {
-                slog::trace!(
-                    logger,
-                    ">> Invalid Tree in the header. Does not contain path {:?}",
-                    path
-                );
-                return Ok(false);
-            }
-        },
-    };
-
-    Ok(body_sha == tree_sha)
 }
 
 fn ok() -> Result<Response<Body>, Box<dyn Error>> {
@@ -705,7 +456,7 @@ async fn handle_request(
     debug: bool,
 ) -> Result<Response<Body>, Infallible> {
     let request_uri = request.uri();
-    slog::trace!(logger, "handle_request.request_uri:{}", request_uri);
+    slog::trace!(logger, "[[ INCOMING_REQUEST ]] ==> URI:{} || HEADERS: {:?}", request_uri, request.headers());
     let result = if request_uri.path().starts_with("/healthcheck") {
         ok()
     } else {
