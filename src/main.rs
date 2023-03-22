@@ -51,7 +51,7 @@ type HttpResponseAny = HttpResponse<Token, HttpRequestStreamingCallbackAny>;
 // Limit the total number of calls to an HTTP Request loop to 1000 for now.
 const MAX_HTTP_REQUEST_STREAM_CALLBACK_CALL_COUNT: i32 = 1000;
 //set str because clap need str for default value.
-const DEFAULT_REDIS_EXPIRY_CACHE_TIMEOUT_IN_SECOND: &'static str = "86400"; //24h = 3600 * 24
+const DEFAULT_REDIS_EXPIRY_CACHE_TIMEOUT_IN_SECOND: &'static str = "3600"; //24h = 3600 * 24
 
 #[derive(Parser)]
 #[clap(
