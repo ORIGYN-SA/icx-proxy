@@ -9,6 +9,9 @@ variable "task_definition_cpu" {}
 variable "task_definition_memory" {}
 variable "icx_container_cpu" {}
 variable "icx_container_memory" {}
+variable "enable_varnish" {
+  default = false
+}
 variable "varnish_container_cpu" {}
 variable "varnish_container_memory" {}
 variable "service_desired_count" {}

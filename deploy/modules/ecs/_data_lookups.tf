@@ -6,7 +6,8 @@ data "aws_ecr_repository" "service" {
   name = var.ecr_name
 }
 data "aws_ecr_repository" "varnish" {
-  name = "varnish-icx-proxy"
+  count = var.enable_varnish ? 1 : 0
+  name  = "varnish-icx-proxy"
 }
 data "aws_ssm_parameter" "db_username" {
   name = var.db_username_ssm_parameter_name

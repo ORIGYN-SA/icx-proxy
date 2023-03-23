@@ -43,8 +43,8 @@ locals {
     {
       type        = "ingress"
       protocol    = "tcp"
-      from_port   = 5000,
-      to_port     = 5000,
+      from_port   = var.container_port,
+      to_port     = var.container_port,
       cidr_blocks = ["10.0.0.0/16"]
       description = "Allows inbound traffic from NLB"
     },

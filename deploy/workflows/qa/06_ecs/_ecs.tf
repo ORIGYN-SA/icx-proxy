@@ -14,6 +14,7 @@ module "ecs" {
   task_definition_memory         = var.task_definition_memory
   icx_container_cpu              = var.icx_container_cpu
   icx_container_memory           = var.icx_container_memory
+  enable_varnish                 = var.enable_varnish
   varnish_container_cpu          = var.varnish_container_cpu
   varnish_container_memory       = var.varnish_container_memory
   container_port                 = var.container_port
