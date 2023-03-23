@@ -16,10 +16,10 @@ stages:
 
 .env_rules:
   rules:
-    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "main"
       variables:
         DYNAMIC_ENV: "dev"
-    - if: $CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "dev"
       variables:
         DYNAMIC_ENV: "qa"
 
