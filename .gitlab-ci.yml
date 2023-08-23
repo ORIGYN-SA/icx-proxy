@@ -63,7 +63,7 @@ deploy-service:
   when: on_success
   script:
     - *common_methods_template
-    - envsubst '$DOCKER_REGISTRY $APP_NAME $DYNAMIC_ENV $DOCKER_IMAGE_TAG $CI_COMMIT_SHA $PORT' < docker-compose-deploy.yml | ssh $USERNAME@$SERVERIP "cd icx-proxy && cat > docker-compose.tmp"
+    - envsubst '$DOCKER_REGISTRY $APP_NAME $DYNAMIC_ENV $DOCKER_IMAGE_TAG $CI_COMMIT_SHA $PORT' < docker-compose-deploy.yml | ssh $USERNAME@$SERVERIP cat > docker-compose.tmp
     - ssh $USERNAME@$SERVERIP sudo docker stack deploy --compose-file docker-compose.tmp ${SERVICE}
     - ssh $USERNAME@$SERVERIP sudo docker image prune -f
   tags:
