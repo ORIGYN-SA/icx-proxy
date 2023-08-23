@@ -1,0 +1,10 @@
+version: "3"
+services:
+  icx-proxy:
+    depends_on:
+      - redis
+    image: ${DOCKER_REGISTRY}/${APP_NAME}-${DYNAMIC_ENV}:${CI_COMMIT_SHA}
+    ports:
+      - "${PORT}:5000"
+  redis:
+    image: redis:alpine
