@@ -6,10 +6,6 @@ stages:
 
 variables:
   APP_NAME: icx-proxy
-  DOCKER_HOST: tcp://10.23.1.240:2377
-  DOCKER_DRIVER: overlay2
-  SERVERIP: 10.23.1.240
-  USERNAME: dustin
   DOCKER_REGISTRY: registry.origyn.ch
 
 .configure_docker: &configure_docker
@@ -49,8 +45,8 @@ build-push:
     - docker
 
 deploy-service:
-  extends: .env_rules
   stage: deploy
+  extends: .env_rules
   needs:
     - job: build-push
   when: on_success
