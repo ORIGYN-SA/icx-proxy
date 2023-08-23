@@ -59,6 +59,7 @@ build-push:
 deploy-service:
   extends: .env_rules
   stage: deploy
+  image: ubuntu
   script:
     - envsubst '$DOCKER_REGISTRY $APP_NAME $DYNAMIC_ENV $DOCKER_IMAGE_TAG $CI_COMMIT_SHA $PORT' < docker-compose-deploy.yml | ssh $USERNAME@$SERVERIP "cd icx-proxy && cat > docker-compose.tmp"
     - ssh $USERNAME@$SERVERIP "cd icx-proxy && sudo docker stack deploy --compose-file docker-compose.tmp ${SERVICE}
