@@ -6,11 +6,22 @@ stages:
 
 variables:
   APP_NAME: icx-proxy
+  DOCKER_HOST: tcp://10.23.1.240:2377
+  DOCKER_DRIVER: overlay2
+  SERVERIP: 10.23.1.240
+  USERNAME: dustin
   DOCKER_REGISTRY: registry.origyn.ch
 
-.configure_docker: &configure_docker
-  - apt-get update && apt-get install -y docker.io && apt-get -y install gettext-base
-  - echo "${CI_REGISTRY_PASSWORD}" | docker login -u $CI_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
+.common_methods_template: &common_methods_template
+  - apt update > /dev/null
+  - apt install -y openssh-client rsync curl gettext > /dev/null
+  - eval $(ssh-agent -s)
+  - mkdir -p ~/.ssh
+  - echo "${origynwebdeploy}" | tr -d '\r' | ssh-add -
+  - chmod 700 ~/.ssh
+  - ssh-keyscan -H 10.23.1.240  > ~/.ssh/known_hosts
+  - chmod 644 ~/.ssh/known_hosts
+  - echo "${CI_REGISTRY_PASSWORD}" | ssh $USERNAME@$SERVERIP sudo docker login -u $CI_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
 
 .env_rules:
   rules:
@@ -51,9 +62,9 @@ deploy-service:
     - job: build-push
   when: on_success
   script:
-    - *configure_docker
-    - envsubst '$DOCKER_REGISTRY $APP_NAME $DYNAMIC_ENV $DOCKER_IMAGE_TAG $CI_COMMIT_SHA $PORT' < docker-compose-deploy.yml | cat > docker-compose.tmp
-    - docker stack deploy --compose-file docker-compose.tmp ${SERVICE}
-    - docker image prune -f
+    - *common_methods_template
+    - envsubst '$DOCKER_REGISTRY $APP_NAME $DYNAMIC_ENV $DOCKER_IMAGE_TAG $CI_COMMIT_SHA $PORT' < docker-compose-deploy.yml | ssh $USERNAME@$SERVERIP sudo "cd icx-proxy && cat > docker-compose.tmp"
+    - ssh $USERNAME@$SERVERIP sudo docker stack deploy --compose-file docker-compose.tmp ${SERVICE}
+    - ssh $USERNAME@$SERVERIP sudo docker image prune -f
   tags:
     - docker
