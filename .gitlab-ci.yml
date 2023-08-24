@@ -32,7 +32,7 @@ variables:
         DOCKER_IMAGE_TAG: $CI_COMMIT_SHA
         PORT: 5001
         SERVICE: "icx-proxy-develop"
-    - if: $CI_COMMIT_BRANCH == "develop" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"
       variables:
         DYNAMIC_ENV: "prod"
         BRANCH: "master"
