@@ -2,7 +2,7 @@
 
 A command line tool to serve as a gateway for a Internet Computer replica. This is being deployed to production at [prptl.io](https://prptl.io/).
 
-## Uri convertion
+## Uri conversion
 
 The proxy transform the incoming http request to a canister call and return the canister answer.
 The base transformation pattern is:
