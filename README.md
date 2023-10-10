@@ -4,16 +4,16 @@ A command line tool to serve as a gateway for a Internet Computer replica. This 
 
 ## Uri conversion
 
-The proxy transform the incoming http request to a canister call and return the canister answer.
+The `#proxy` transform the incoming http request to `#canister` call and return th`#canister` answer.
 The base transformation pattern is:
 
 ```
-https://prptl.io/-/<canister-id>/-/y/some/uri => <canister-id>.raw.ic0.app/-y/some/uri
+https://prptl.io/-<canister-id>/-/y/some/uri =><canister-id>.raw.ic0.app/-y/some/uri
 ```
 
-The `<canister-id>` can be either an alias or an actual canister id. In case it is an alias, the phonebook canister will be used to check the canister id of the alias.
+The <canister-id> can be either an alias or an actual `#canister` id. In case it is an alias, the `#phonebook` `#canister` will be used to check the `#canister` id of the alias.
 
-x can be a canister id or an alias that is mapped to a canister id.
+x can be `#canister` id or an alias that is mapped to `#canister` id.
 
 ### Example:
 
@@ -25,49 +25,49 @@ becomes
 
 https://mludz-biaaa-aaaal-qbhwa-cai.raw.ic0.app/-/epithalamus-amygdala-diencephalon/ex
 
-In the example above we can see that the alias is `brain-matters-dev`. This means that icx-proxy will query the phonebook canister to get its canister id.
+In the example above we can see that the alias is `brain-matters-dev`. This means that icx-`#proxy` will query the `#phonebook` `#canister` to get it`#canister` id.
 
 ### Definition of alias
 
-Alias mapping is defined using the phone book canister. An alias for each canister id is inserted in the phonebook canister.
+Alias mapping is defined using the `#phone book` `#canister`. An alias for each `#canister` id is inserted in the `#phonebook` `#canister`.
 
-The canister id of the phonebook canister id: `ngrpb-5qaaa-aaaaj-adz7a-cai`.
+The `#canister` id of the `#phonebook` `#canister` id: `ngrpb-5qaaa-aaaaj-adz7a-cai`.
 
 The interface is:
 
 ```
-type PhoneBook =
+type phonebook =
  service {
-   insert: (Name, Canisters) -> (opt Canisters);
-   lookup: (Name) -> (opt vec Canister) query;
-   update_admin: (Canisters) -> (Canisters);
+   insert: (Name canisters) -> (opt canister);
+   lookup: (Name) -> (opt canister) query;
+   update_admin: canister) -> canister);
  };
 type Name = text;
-type Canisters = vec Canister;
-type Canister = principal;
-service : (principal) -> PhoneBook
+type canister = vec canister;
+type canister = principal;
+service : (principal) -> phonebook
 ```
 
-Alias are added using the insert canister call.
+Alias are added using the insert `#canister` call.
 
 ## Alias use
 
-When the proxy server is call, the uri is decoded and if it found an alias in the uri, it's mapped to a canister id.
+When the `#proxy` server is call, the uri is decoded and if it found an alias in the uri, it's mapped to `#canister` id.
 The mapping is done as follow:
 
 - call the Redis cache server to see if it exists in the cache.
-- If not call the phone book canister with the lookup call.
+- If not call the `#phone book` `#canister` with the lookup call.
 - if not found, return an error.
-- if an alias is found, call the canister mapped by the alias and return the answer
+- if an alias is found, call the `#canister` mapped by the alias and return the answer
 - if an alias is found and not present in the cache, add it after the end of the request.
 
 ## Command line configuration
 
-To start the proxy, you must provide these parameters:
+To start the `#proxy`, you must provide these parameters:
 
-- --replica: define the IC network to connect to the canister. ex: `https://ic0.app` . Several replica can be defined to start multiple listener that connect to multiple IC network or sub network.
+- --replica: define the IC network to connect to the `#canister`. ex: `https://ic0.app` . Several replica can be defined to start multiple listener that connect to multiple IC network or sub network.
 - --redis-url: The url to connect to the redis cache. ex: `redis://localhost:6379/`. If a login/ pass is mandatory, it must be added to the url.
-- --phonebook-id. Id of the phone book canister. ex: `ngrpb-5qaaa-aaaaj-adz7a-cai`
+- --`#phonebook`-id. Id of the `#phone book` `#canister`. ex: `ngrpb-5qaaa-aaaaj-adz7a-cai`
 
 Optional:
 
@@ -76,7 +76,7 @@ Optional:
 Exemple of start command:
 
 ```
-icx-proxy --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
+icx-`#proxy` --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --`#phonebook`-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 ```
 
 ## Running locally
@@ -97,16 +97,16 @@ docker-compose up
 docker run -p 6379:6379 redis:5.0
 ```
 
-2. Start icx-proxy server
+2. Start icx-`#proxy` server
 
 ```bash
-cargo run -- --debug -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
+cargo run -- --debug -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --`#phonebook`-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 ```
 
 To add more trace add a -v
 
 ```bash
-cargo run -- --debug -v -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --phonebook-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
+cargo run -- --debug -v -v --log "stderr" --replica "https://ic0.app" --redis-url "redis://localhost:6379/" --`#phonebook`-id "ngrpb-5qaaa-aaaaj-adz7a-cai"
 ```
 
 ## Example of connection test
@@ -119,7 +119,7 @@ http://127.0.0.1:3000/-/brain-matters-dev/-/epithalamus-amygdala-diencephalon/in
 
 ## Skip validation
 
-Add the `_raw` tag to the URL query string to skip certificate validation of canister answer.
+Add the `_raw` tag to the URL query string to skip certificate validation on `#canister` answer.
 ex:
 
 http://127.0.0.1:3000/-/brain-matters-dev/-/epithalamus-amygdala-diencephalon?_raw_
@@ -131,7 +131,7 @@ the uri is: /healthcheck and it returns 200 / OK
 
 ## Usage
 
-Once installed, using `icx-proxy --help` will show the usage message and all the flags.
+Once installed, using `icx-proxy` --help` will show the usage message and all the flags.
 
 ## Current environment information
 
